@@ -1,0 +1,1826 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "OpenAsy SAST API",
+    "version": "0.1.0",
+    "summary": "Static analysis findings from every pull request; only what is new blocks it.",
+    "description": "Every screen of sast uses this API, and so can your scripts and CI (ADR 0014). Within `/api/v1` changes are additive only; anything removed is deprecated first (ADR 0024). Errors use Problem Details (RFC 9457).\n\nSend SARIF 2.1.0 from any analyser with `SAST_INGEST_TOKEN`. Everything else takes the session of a signed-in person or an API token, and each operation names the role it needs (`x-openasy-role`: viewer, editor, admin; ADR 0003).\n\nSign-in, members and API tokens are under `/api/v1/auth`, provided by [@openasy/auth](https://github.com/openasy/auth#routes).",
+    "license": {
+      "name": "AGPL-3.0-only",
+      "identifier": "AGPL-3.0-only"
+    }
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "This sast"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Scans",
+      "description": "SARIF from CI, compared with the default branch."
+    },
+    {
+      "name": "Repositories",
+      "description": "What is scanned, its baseline branch and when a check fails."
+    },
+    {
+      "name": "Findings",
+      "description": "What the analysers found, and the decisions about it."
+    },
+    {
+      "name": "Product",
+      "description": "Version and overview of this sast."
+    }
+  ],
+  "paths": {
+    "/api/v1/scans": {
+      "post": {
+        "operationId": "sendScan",
+        "tags": [
+          "Scans"
+        ],
+        "summary": "Send a scan",
+        "security": [
+          {
+            "ingestToken": []
+          },
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "description": "Takes a SARIF 2.1.0 log from any analyser, such as Opengrep, Semgrep or CodeQL, and compares it with the default branch. Scans of the default branch become the baseline; every other scan reports only the findings the baseline does not have and nobody has triaged, and `blocking` counts those at or above the repository's `failOn`. The repository is created by its first scan.\n\n```bash\nopengrep scan --sarif-output=results.sarif .\ncurl -sf -X POST -H \"Authorization: Bearer $SAST_INGEST_TOKEN\" -H 'content-type: application/json' --data-binary @results.sarif \\\n  \"https://sast.example.com/api/v1/scans?repository=acme/web&branch=$BRANCH&commit=$SHA&pullRequest=$PR\" | tee scan.json\ntest \"$(jq .passed scan.json)\" = true\n```\n\nThe body may be gzipped (`Content-Encoding: gzip`), up to 64 MiB unpacked, with at most 50,000 results.\n\nTakes SAST_INGEST_TOKEN, or an API token with the editor role.",
+        "parameters": [
+          {
+            "name": "repository",
+            "in": "query",
+            "required": true,
+            "description": "Name such as `acme/web`.",
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "branch",
+            "in": "query",
+            "required": true,
+            "description": "The branch that was scanned.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "commit",
+            "in": "query",
+            "required": false,
+            "description": "The commit hash.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pullRequest",
+            "in": "query",
+            "required": false,
+            "description": "The pull request number or name. A scan of the default branch with a pull request is still compared, not made the baseline.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "defaultBranch",
+            "in": "query",
+            "required": false,
+            "description": "Set when the repository is new or the default branch changed. Without it a new repository uses `main`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "A SARIF 2.1.0 log."
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Compared with the baseline. `passed` says whether the check passes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewScan"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "413": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-openasy-role": "editor"
+      }
+    },
+    "/api/v1/scans/{id}": {
+      "get": {
+        "operationId": "getScan",
+        "tags": [
+          "Scans"
+        ],
+        "summary": "Get a scan",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "description": "Needs the viewer role.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The scan's id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The scan and what it found that was new.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-openasy-role": "viewer"
+      }
+    },
+    "/api/v1/repositories": {
+      "get": {
+        "operationId": "listRepositories",
+        "tags": [
+          "Repositories"
+        ],
+        "summary": "List repositories",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "description": "Needs the viewer role.",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "The previous page's nextCursor.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Repositories by name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositoryList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-openasy-role": "viewer"
+      }
+    },
+    "/api/v1/repositories/{id}": {
+      "get": {
+        "operationId": "getRepository",
+        "tags": [
+          "Repositories"
+        ],
+        "summary": "Get a repository",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "description": "Needs the viewer role.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The repository's id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The repository.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Repository"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-openasy-role": "viewer"
+      },
+      "patch": {
+        "operationId": "updateRepository",
+        "tags": [
+          "Repositories"
+        ],
+        "summary": "Change a repository",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "description": "Sets the default branch whose scans are the baseline, and the severity that fails a check.\n\nNeeds the admin role.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The repository's id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRepository"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The repository.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Repository"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-openasy-role": "admin"
+      },
+      "delete": {
+        "operationId": "deleteRepository",
+        "tags": [
+          "Repositories"
+        ],
+        "summary": "Delete a repository",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "description": "Deletes its scans, findings and triage.\n\nNeeds the admin role.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The repository's id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-openasy-role": "admin"
+      }
+    },
+    "/api/v1/repositories/{id}/scans": {
+      "get": {
+        "operationId": "listRepositoryScans",
+        "tags": [
+          "Scans"
+        ],
+        "summary": "List a repository's scans",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "description": "Needs the viewer role.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The repository's id.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "The previous page's nextCursor.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Newest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-openasy-role": "viewer"
+      }
+    },
+    "/api/v1/repositories/{id}/findings": {
+      "get": {
+        "operationId": "listRepositoryFindings",
+        "tags": [
+          "Findings"
+        ],
+        "summary": "List a repository's findings",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "description": "Needs the viewer role.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The repository's id.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "`open` (default): reported on the default branch and not triaged. `suppressed`: triaged and still reported. `resolved`: no longer reported.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "suppressed",
+                "resolved"
+              ],
+              "default": "open"
+            }
+          },
+          {
+            "name": "severity",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated severities, such as `critical,high`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Matches the rule, path or message.",
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "The previous page's nextCursor.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Most severe first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FindingList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-openasy-role": "viewer"
+      }
+    },
+    "/api/v1/repositories/{id}/findings/{fingerprint}": {
+      "put": {
+        "operationId": "triageFinding",
+        "tags": [
+          "Findings"
+        ],
+        "summary": "Triage a finding",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "description": "Marks a finding as a false positive or accepted risk, with a reason, or opens it again. The decision follows the fingerprint to every branch, so a pull request that adds the same finding does not fail. A finding that is only in a pull request can be triaged too.\n\nNeeds the editor role.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The repository's id.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "fingerprint",
+            "in": "path",
+            "required": true,
+            "description": "From a finding or a scan.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewTriage"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The finding with its decision.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Finding"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-openasy-role": "editor"
+      }
+    },
+    "/api/v1/findings": {
+      "get": {
+        "operationId": "listFindings",
+        "tags": [
+          "Findings"
+        ],
+        "summary": "List findings of every repository",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "description": "Needs the viewer role.",
+        "parameters": [
+          {
+            "name": "repository",
+            "in": "query",
+            "required": false,
+            "description": "Only this repository's id.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "`open` (default): reported on the default branch and not triaged. `suppressed`: triaged and still reported. `resolved`: no longer reported.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "suppressed",
+                "resolved"
+              ],
+              "default": "open"
+            }
+          },
+          {
+            "name": "severity",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated severities, such as `critical,high`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Matches the rule, path or message.",
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "The previous page's nextCursor.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Most severe first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FindingList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-openasy-role": "viewer"
+      }
+    },
+    "/api/v1/summary": {
+      "get": {
+        "operationId": "getSummary",
+        "tags": [
+          "Product"
+        ],
+        "summary": "Overview",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "description": "Needs the viewer role.",
+        "responses": {
+          "200": {
+            "description": "Counts for the whole install.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Summary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-openasy-role": "viewer"
+      }
+    },
+    "/api/v1/version": {
+      "get": {
+        "operationId": "getVersion",
+        "tags": [
+          "Product"
+        ],
+        "summary": "Version",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The running version.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Version"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/products": {
+      "get": {
+        "operationId": "listProducts",
+        "tags": [
+          "Product"
+        ],
+        "summary": "Other products of this install",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "description": "Needs the viewer role.",
+        "responses": {
+          "200": {
+            "description": "From OPENASY_PRODUCTS, for the product switcher.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-openasy-role": "viewer"
+      }
+    },
+    "/healthz": {
+      "get": {
+        "operationId": "liveness",
+        "tags": [
+          "Product"
+        ],
+        "summary": "Liveness",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The process is running.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "operationId": "readiness",
+        "tags": [
+          "Product"
+        ],
+        "summary": "Readiness",
+        "description": "Ready while the database answers.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Ready to serve.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "operationId": "metrics",
+        "tags": [
+          "Product"
+        ],
+        "summary": "Prometheus metrics",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Metrics in the Prometheus text format.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "session": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-openasy-session",
+        "description": "The browser session after signing in (`openasy-session` when sast runs on plain http://localhost). Requests that change something must come from the sast origin."
+      },
+      "apiToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "An API token created under Settings \u2192 API tokens (`oa_sast_...`): one role, always an expiry (ADR 0003)."
+      },
+      "adminToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Only when sast is started by its tests or a local script: one shared token with the admin role. A production install does not have it."
+      },
+      "ingestToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "`SAST_INGEST_TOKEN`: for CI. It can send scans, nothing else."
+      }
+    },
+    "responses": {
+      "Problem": {
+        "description": "An error, as RFC 9457 Problem Details.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Problem": {
+        "type": "object",
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer"
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "invalid-token",
+              "invalid-json",
+              "invalid-body",
+              "invalid-sarif",
+              "not-found",
+              "not-configured",
+              "payload-too-large",
+              "internal-error",
+              "unauthenticated",
+              "invalid-credentials",
+              "mfa-required",
+              "mfa-setup-required",
+              "forbidden",
+              "cross-site",
+              "rate-limited"
+            ],
+            "description": "Stable; match on this."
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
+      },
+      "Severity": {
+        "type": "string",
+        "enum": [
+          "critical",
+          "high",
+          "medium",
+          "low"
+        ]
+      },
+      "FailOn": {
+        "type": "string",
+        "enum": [
+          "critical",
+          "high",
+          "medium",
+          "low",
+          "none"
+        ],
+        "description": "The lowest severity of a new finding that fails the check; `none` never fails it."
+      },
+      "Counts": {
+        "type": "object",
+        "required": [
+          "critical",
+          "high",
+          "medium",
+          "low"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "critical": {
+            "type": "integer"
+          },
+          "high": {
+            "type": "integer"
+          },
+          "medium": {
+            "type": "integer"
+          },
+          "low": {
+            "type": "integer"
+          }
+        }
+      },
+      "Version": {
+        "type": "object",
+        "required": [
+          "product",
+          "version"
+        ],
+        "properties": {
+          "product": {
+            "const": "sast"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "ProductLink": {
+        "type": "object",
+        "required": [
+          "id",
+          "url"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The product, as OpenAsy names it.",
+            "examples": [
+              "infrastructure"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "The address people open it at.",
+            "examples": [
+              "https://infra.example.com"
+            ]
+          }
+        }
+      },
+      "ProductList": {
+        "type": "object",
+        "required": [
+          "products"
+        ],
+        "properties": {
+          "products": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProductLink"
+            }
+          }
+        }
+      },
+      "Status": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "Summary": {
+        "type": "object",
+        "required": [
+          "repositories",
+          "open",
+          "suppressed",
+          "failingChecks",
+          "lastScanAt"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "repositories": {
+            "type": "integer"
+          },
+          "open": {
+            "$ref": "#/components/schemas/Counts"
+          },
+          "suppressed": {
+            "type": "integer",
+            "description": "Open findings someone marked as a false positive or accepted risk."
+          },
+          "failingChecks": {
+            "type": "integer",
+            "description": "Scans of the last 7 days that failed their check."
+          },
+          "lastScanAt": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "date-time"
+              }
+            ]
+          }
+        }
+      },
+      "Repository": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "defaultBranch",
+          "failOn",
+          "open",
+          "suppressed",
+          "lastScan",
+          "createdAt"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "defaultBranch": {
+            "type": "string"
+          },
+          "failOn": {
+            "$ref": "#/components/schemas/FailOn"
+          },
+          "open": {
+            "$ref": "#/components/schemas/Counts"
+          },
+          "suppressed": {
+            "type": "integer"
+          },
+          "lastScan": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "at",
+                  "kind",
+                  "branch",
+                  "new",
+                  "passed"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "baseline",
+                      "change"
+                    ]
+                  },
+                  "branch": {
+                    "type": "string"
+                  },
+                  "new": {
+                    "type": "integer"
+                  },
+                  "passed": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RepositoryList": {
+        "type": "object",
+        "required": [
+          "repositories"
+        ],
+        "properties": {
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Repository"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "description": "Pass the previous page's nextCursor to get the next page."
+          }
+        }
+      },
+      "UpdateRepository": {
+        "type": "object",
+        "additionalProperties": false,
+        "minProperties": 1,
+        "properties": {
+          "defaultBranch": {
+            "type": "string"
+          },
+          "failOn": {
+            "$ref": "#/components/schemas/FailOn"
+          }
+        }
+      },
+      "TriageState": {
+        "type": "object",
+        "required": [
+          "state",
+          "reason",
+          "by",
+          "at",
+          "expiresAt",
+          "active"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "false-positive",
+              "accepted"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "by": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "at": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "date-time"
+              }
+            ]
+          },
+          "expiresAt": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "date-time"
+              }
+            ]
+          },
+          "active": {
+            "type": "boolean",
+            "description": "False once the acceptance has expired; the finding is open again."
+          }
+        }
+      },
+      "Finding": {
+        "type": "object",
+        "required": [
+          "repository",
+          "fingerprint",
+          "rule",
+          "severity",
+          "path",
+          "line",
+          "message",
+          "snippet",
+          "firstSeen",
+          "lastSeen",
+          "resolvedAt",
+          "triage"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "repository": {
+            "type": "object",
+            "required": [
+              "id",
+              "name"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          },
+          "fingerprint": {
+            "type": "string",
+            "description": "Stable across moved lines and other branches."
+          },
+          "rule": {
+            "type": "string"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "path": {
+            "type": "string"
+          },
+          "line": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "snippet": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "firstSeen": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastSeen": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "resolvedAt": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "date-time"
+              }
+            ]
+          },
+          "triage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TriageState"
+              }
+            ]
+          }
+        }
+      },
+      "FindingList": {
+        "type": "object",
+        "required": [
+          "findings"
+        ],
+        "properties": {
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "description": "Pass the previous page's nextCursor to get the next page."
+          }
+        }
+      },
+      "NewTriage": {
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "false-positive",
+              "accepted"
+            ],
+            "description": "`open` clears an earlier decision."
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 500,
+            "description": "Required for false-positive and accepted."
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Required for accepted, at most 366 days away; optional for a false positive."
+          }
+        }
+      },
+      "Scan": {
+        "type": "object",
+        "required": [
+          "id",
+          "repository",
+          "kind",
+          "branch",
+          "commit",
+          "pullRequest",
+          "tool",
+          "total",
+          "new",
+          "suppressed",
+          "blocking",
+          "failOn",
+          "passed",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "object",
+            "required": [
+              "id",
+              "name"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "baseline",
+              "change"
+            ],
+            "description": "`baseline` for the default branch, `change` for any other branch or a pull request."
+          },
+          "branch": {
+            "type": "string"
+          },
+          "commit": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "pullRequest": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "tool": {
+            "type": "string"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Everything the tool reported."
+          },
+          "new": {
+            "type": "integer",
+            "description": "Findings the baseline does not have and nobody has triaged."
+          },
+          "suppressed": {
+            "type": "integer",
+            "description": "New findings someone had triaged."
+          },
+          "blocking": {
+            "type": "integer",
+            "description": "New findings at or above failOn. Always 0 for a scan of the default branch, which adopts what is there."
+          },
+          "failOn": {
+            "$ref": "#/components/schemas/FailOn"
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "NewScan": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Scan"
+          },
+          {
+            "type": "object",
+            "required": [
+              "findings"
+            ],
+            "properties": {
+              "findings": {
+                "type": "array",
+                "maxItems": 100,
+                "description": "The new findings, most severe first, up to 100.",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "fingerprint",
+                    "rule",
+                    "severity",
+                    "path",
+                    "line",
+                    "message"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "fingerprint": {
+                      "type": "string"
+                    },
+                    "rule": {
+                      "type": "string"
+                    },
+                    "severity": {
+                      "$ref": "#/components/schemas/Severity"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "line": {
+                      "oneOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "integer"
+                        }
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "ScanDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Scan"
+          },
+          {
+            "type": "object",
+            "required": [
+              "findings"
+            ],
+            "properties": {
+              "findings": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "fingerprint",
+                    "rule",
+                    "severity",
+                    "path",
+                    "line",
+                    "message",
+                    "snippet",
+                    "suppressed"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "fingerprint": {
+                      "type": "string"
+                    },
+                    "rule": {
+                      "type": "string"
+                    },
+                    "severity": {
+                      "$ref": "#/components/schemas/Severity"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "line": {
+                      "oneOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "integer"
+                        }
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "snippet": {
+                      "oneOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "suppressed": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "ScanList": {
+        "type": "object",
+        "required": [
+          "scans"
+        ],
+        "properties": {
+          "scans": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Scan"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "description": "Pass the previous page's nextCursor to get the next page."
+          }
+        }
+      }
+    }
+  }
+}

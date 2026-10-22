@@ -1,0 +1,22 @@
+/* The few layouts this product needs that @openasy/ui's prebuilt styles do not include. Colours stay in the library's tokens. */
+
+/* One line of a long message in a table cell; the full text is in the title. */
+.sast-clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  max-width: 32rem;
+  overflow-wrap: anywhere;
+}
+
+/* Paths break anywhere rather than widening their column. */
+.sast-wrap {
+  overflow-wrap: anywhere;
+}
+
+.sast-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}

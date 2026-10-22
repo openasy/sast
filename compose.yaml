@@ -1,0 +1,35 @@
+# SAST. CI sends SARIF from any analyser (Opengrep, Semgrep, CodeQL) and gets back whether the check passes (ADR 0036).
+#
+#   openssl rand -hex 32 > openasy-kek   # sast's key: sign-in secrets (ADR 0021). Keep it with your backups
+#   docker compose up -d
+#   docker compose logs sast | grep 'no owner yet'   # the one-time link that creates the owner account
+services:
+  sast:
+    image: ghcr.io/openasy/sast:0.1.0
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: [/tmp]
+    ports:
+      - "127.0.0.1:8080:8080"   # UI and API; put a TLS proxy in front to reach it from elsewhere
+    volumes:
+      - sast-data:/data   # SQLite database: repositories, scans, findings and decisions
+    secrets:
+      - openasy-kek   # mounted at /run/secrets/openasy-kek
+    environment:
+      # The address people open SAST at; with a TLS proxy in front, its https:// URL.
+      SAST_PUBLIC_URL: ${SAST_PUBLIC_URL:-http://localhost:8080}
+      # For CI: it can send scans and nothing else. Or use an API token with the editor role from Settings.
+      SAST_INGEST_TOKEN: ${SAST_INGEST_TOKEN:-}
+      # Sign in with your identity provider (OIDC), see the README:
+      # SAST_OIDC_ISSUER: https://login.example.com
+      # SAST_OIDC_CLIENT_ID: sast
+      # SAST_OIDC_CLIENT_SECRET: ${SAST_OIDC_CLIENT_SECRET}
+
+volumes:
+  sast-data:
+
+secrets:
+  openasy-kek:
+    file: ./openasy-kek
