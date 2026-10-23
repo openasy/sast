@@ -30,7 +30,19 @@ import {
 import { AccountSettings, AuthGate, MembersSettings, SignInSettings, TokensSettings, useAuth } from "@openasy/auth/react";
 import { Bug, CircleSlash, FolderGit2, KeyRound, LogIn, LogOut, Settings2, Trash2, UserRound, Users, X } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { api, MfaSetupRequired, Unauthorized, type FailOn, type Finding, type ProductLink, type Repository, type Scan, type ScanDetail, type Severity, type Summary } from "./api.ts";
+import {
+  api,
+  MfaSetupRequired,
+  Unauthorized,
+  type FailOn,
+  type Finding,
+  type ProductLink,
+  type Repository,
+  type Scan,
+  type ScanDetail,
+  type Severity,
+  type Summary,
+} from "./api.ts";
 import { useT, type T } from "./i18n.ts";
 
 const PAGES = ["repositories", "setup", "account", "members", "signin", "tokens"] as const;
@@ -64,13 +76,13 @@ function useApi() {
 type Call = ReturnType<typeof useApi>;
 
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low"];
-const FAIL_ON = (t: T): Array<{ value: FailOn; label: string }> => ([
+const FAIL_ON = (t: T): Array<{ value: FailOn; label: string }> => [
   { value: "critical", label: t("failOn.critical") },
   { value: "high", label: t("failOn.highOrWorse") },
   { value: "medium", label: t("failOn.mediumOrWorse") },
   { value: "low", label: t("failOn.anyFinding") },
   { value: "none", label: t("failOn.neverFail") },
-]);
+];
 
 /** Compact severity counts; each badge carries the full name for screen readers. */
 function SevCounts({ counts }: { counts: Record<Severity, number> }) {
@@ -121,7 +133,10 @@ function FindingPanel({ finding, call, onClose, onChanged }: { finding: Detail; 
   const decide = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      await call(url, { method: "PUT", body: JSON.stringify({ state, reason, ...(state === "accepted" && { expiresAt: new Date(Date.now() + Number(days) * 86_400_000).toISOString() }) }) });
+      await call(url, {
+        method: "PUT",
+        body: JSON.stringify({ state, reason, ...(state === "accepted" && { expiresAt: new Date(Date.now() + Number(days) * 86_400_000).toISOString() }) }),
+      });
       close();
       onChanged();
     } catch (err) {
@@ -155,7 +170,13 @@ function FindingPanel({ finding, call, onClose, onChanged }: { finding: Detail; 
         {t && (
           <div className="flex flex-col gap-1 rounded-md border border-line p-2.5 text-xs">
             <span>
-              <StatusBadge tone={t.active ? "success" : "neutral"}>{t.state === "false-positive" ? msg("findingPanel.falsePositive") : t.active ? msg("findingPanel.acceptedRisk") : msg("findingPanel.acceptanceExpired")}</StatusBadge>
+              <StatusBadge tone={t.active ? "success" : "neutral"}>
+                {t.state === "false-positive"
+                  ? msg("findingPanel.falsePositive")
+                  : t.active
+                    ? msg("findingPanel.acceptedRisk")
+                    : msg("findingPanel.acceptanceExpired")}
+              </StatusBadge>
             </span>
             <span>{t.reason}</span>
             <span className="text-fg-muted">
@@ -203,7 +224,13 @@ function FindingPanel({ finding, call, onClose, onChanged }: { finding: Detail; 
               { value: "accepted", label: msg("findingPanel.acceptedRisk") },
             ]}
           />
-          <TextField label={msg("findingPanel.reason")} value={reason} onChange={(e) => setReason(e.target.value)} hint={msg("findingPanel.whyForTheNextReview")} error={error} />
+          <TextField
+            label={msg("findingPanel.reason")}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            hint={msg("findingPanel.whyForTheNextReview")}
+            error={error}
+          />
           {state === "accepted" && (
             <SelectField
               label={msg("findingPanel.for")}
@@ -248,7 +275,10 @@ function FindingsTable({ call, repoId, summary, reload }: { call: Call; repoId?:
     [call, base, tab, sev, q],
   );
   const load = useCallback(() => {
-    query().then((r) => (setRows(r.findings), setMore(r.nextCursor)), () => setRows([]));
+    query().then(
+      (r) => (setRows(r.findings), setMore(r.nextCursor)),
+      () => setRows([]),
+    );
   }, [query]);
   useEffect(load, [load]);
   const loadMore = () => more && query(more).then((r) => (setRows((x) => [...(x ?? []), ...r.findings]), setMore(r.nextCursor)));
@@ -281,8 +311,21 @@ function FindingsTable({ call, repoId, summary, reload }: { call: Call; repoId?:
         </span>
       ),
     },
-    ...(repoId ? [] : [{ id: "repo", header: t("findingsTable.repository"), cell: (f: Finding) => <span className="text-xs">{f.repository.name}</span> } satisfies Column<Finding>]),
-    { id: "seen", header: t("findingsTable.firstSeen"), sortValue: (f) => f.firstSeen, cell: (f) => <span className="text-xs whitespace-nowrap">{ago(f.firstSeen)}</span> },
+    ...(repoId
+      ? []
+      : [
+          {
+            id: "repo",
+            header: t("findingsTable.repository"),
+            cell: (f: Finding) => <span className="text-xs">{f.repository.name}</span>,
+          } satisfies Column<Finding>,
+        ]),
+    {
+      id: "seen",
+      header: t("findingsTable.firstSeen"),
+      sortValue: (f) => f.firstSeen,
+      cell: (f) => <span className="text-xs whitespace-nowrap">{ago(f.firstSeen)}</span>,
+    },
   ];
 
   return (
@@ -298,7 +341,12 @@ function FindingsTable({ call, repoId, summary, reload }: { call: Call; repoId?:
         ]}
       />
       <FilterBar onClear={() => (setSev([]), setQ(""))}>
-        <FacetFilter label={t("findingsTable.severity")} selected={sev} onChange={setSev} options={SEVERITIES.map((s) => ({ value: s, label: s.charAt(0).toUpperCase() + s.slice(1), count: tab === "open" ? summary?.open[s] : undefined }))} />
+        <FacetFilter
+          label={t("findingsTable.severity")}
+          selected={sev}
+          onChange={setSev}
+          options={SEVERITIES.map((s) => ({ value: s, label: s.charAt(0).toUpperCase() + s.slice(1), count: tab === "open" ? summary?.open[s] : undefined }))}
+        />
         <SearchInput label={t("findingsTable.searchRulePathOrMessage")} className="w-64" value={q} onChange={(e) => setQ(e.target.value)} />
       </FilterBar>
       <div className={open ? "grid gap-2.5 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]" : "grid gap-2.5"}>
@@ -325,10 +373,18 @@ function FindingsTable({ call, repoId, summary, reload }: { call: Call; repoId?:
             minWidth={860}
             pageSize={50}
             empty={
-              <EmptyState title={tab === "open" ? t("findingsTable.noOpenFindings") : tab === "suppressed" ? t("findingsTable.nothingTriaged") : t("findingsTable.nothingFixedYet")}>
+              <EmptyState
+                title={
+                  tab === "open"
+                    ? t("findingsTable.noOpenFindings")
+                    : tab === "suppressed"
+                      ? t("findingsTable.nothingTriaged")
+                      : t("findingsTable.nothingFixedYet")
+                }
+              >
                 {tab === "open" && summary && !Object.values(summary.open).some(Boolean) ? (
                   <>
-                    {t("findingsTable.sendAScanFromCi")}{" "}<a href="/setup">{t("findingsTable.setup")}</a>.
+                    {t("findingsTable.sendAScanFromCi")} <a href="/setup">{t("findingsTable.setup")}</a>.
                   </>
                 ) : (
                   t("findingsTable.nothingMatchesTheseFilters")
@@ -360,7 +416,10 @@ function FindingsPage({ call, summary, reload }: { call: Call; summary?: Summary
   const s = summary;
   return (
     <>
-      <PageHeader title={t("findingsPage.findings")} description={s ? t("findingsPage.lastScan", { plural: t("plurals.repository", { count: s.repositories }), ago: ago(s.lastScanAt) }) : undefined} />
+      <PageHeader
+        title={t("findingsPage.findings")}
+        description={s ? t("findingsPage.lastScan", { plural: t("plurals.repository", { count: s.repositories }), ago: ago(s.lastScanAt) }) : undefined}
+      />
       {s && (
         <KpiGrid minWidth={150}>
           <KpiCard label={t("findingsPage.critical")} value={s.open.critical} footer={<SeverityBadge severity="critical" />} />
@@ -385,7 +444,14 @@ function RepositoriesPage({ call }: { call: Call }) {
   const ago = useAgo();
   const t = useT();
   const [rows, setRows] = useState<Repository[]>();
-  useEffect(() => void call<{ repositories: Repository[] }>("/api/v1/repositories?limit=500").then((r) => setRows(r.repositories), () => setRows([])), [call]);
+  useEffect(
+    () =>
+      void call<{ repositories: Repository[] }>("/api/v1/repositories?limit=500").then(
+        (r) => setRows(r.repositories),
+        () => setRows([]),
+      ),
+    [call],
+  );
   const columns: Column<Repository>[] = [
     {
       id: "name",
@@ -400,8 +466,23 @@ function RepositoriesPage({ call }: { call: Call }) {
     },
     { id: "branch", header: t("repositoriesPage.defaultBranch"), mono: true, cell: (r) => r.defaultBranch },
     { id: "open", header: t("repositoriesPage.open"), cell: (r) => <SevCounts counts={r.open} /> },
-    { id: "last", header: t("repositoriesPage.lastScan"), cell: (r) => (r.lastScan ? <span className="text-xs">{ago(r.lastScan.at)}, {r.lastScan.kind === "baseline" ? t("repositoriesPage.defaultBranch2") : r.lastScan.branch}</span> : "–") },
-    { id: "check", header: t("repositoriesPage.check"), cell: (r) => (r.lastScan ? <ScanStatus s={{ passed: r.lastScan.passed, kind: r.lastScan.kind }} /> : "–") },
+    {
+      id: "last",
+      header: t("repositoriesPage.lastScan"),
+      cell: (r) =>
+        r.lastScan ? (
+          <span className="text-xs">
+            {ago(r.lastScan.at)}, {r.lastScan.kind === "baseline" ? t("repositoriesPage.defaultBranch2") : r.lastScan.branch}
+          </span>
+        ) : (
+          "–"
+        ),
+    },
+    {
+      id: "check",
+      header: t("repositoriesPage.check"),
+      cell: (r) => (r.lastScan ? <ScanStatus s={{ passed: r.lastScan.passed, kind: r.lastScan.kind }} /> : "–"),
+    },
   ];
   return (
     <>
@@ -416,7 +497,7 @@ function RepositoriesPage({ call }: { call: Call }) {
           minWidth={760}
           empty={
             <EmptyState title={t("repositoriesPage.noRepositoriesYet")}>
-              {t("repositoriesPage.sendAScanFromCi")}{" "}<a href="/setup">{t("repositoriesPage.setup")}</a>.
+              {t("repositoriesPage.sendAScanFromCi")} <a href="/setup">{t("repositoriesPage.setup")}</a>.
             </EmptyState>
           }
         />
@@ -437,8 +518,14 @@ function RepositoryPage({ call, id, reload }: { call: Call; id: string; reload: 
   const [removing, setRemoving] = useState(false);
 
   const load = useCallback(() => {
-    call<Repository>(`/api/v1/repositories/${id}`).then((r) => (setRepo(r), setFailOn(r.failOn), setBranch(r.defaultBranch)), () => setRepo(null));
-    call<{ scans: Scan[] }>(`/api/v1/repositories/${id}/scans?limit=50`).then((r) => setScans(r.scans), () => setScans([]));
+    call<Repository>(`/api/v1/repositories/${id}`).then(
+      (r) => (setRepo(r), setFailOn(r.failOn), setBranch(r.defaultBranch)),
+      () => setRepo(null),
+    );
+    call<{ scans: Scan[] }>(`/api/v1/repositories/${id}/scans?limit=50`).then(
+      (r) => setScans(r.scans),
+      () => setScans([]),
+    );
   }, [call, id]);
   useEffect(load, [load]);
 
@@ -453,12 +540,20 @@ function RepositoryPage({ call, id, reload }: { call: Call; id: string; reload: 
     }
   };
   const remove = () =>
-    call(`/api/v1/repositories/${id}`, { method: "DELETE" }).then(() => {
-      reload();
-      navigate("/repositories");
-    }, (err: Error) => setError(err.message));
+    call(`/api/v1/repositories/${id}`, { method: "DELETE" }).then(
+      () => {
+        reload();
+        navigate("/repositories");
+      },
+      (err: Error) => setError(err.message),
+    );
 
-  if (repo === null) return <EmptyState title={t("repositoryPage.repositoryNotFound")}>{t("repositoryPage.itMayHaveBeenDeleted")}{" "}<a href="/repositories">{t("repositoryPage.backToRepositories")}</a>.</EmptyState>;
+  if (repo === null)
+    return (
+      <EmptyState title={t("repositoryPage.repositoryNotFound")}>
+        {t("repositoryPage.itMayHaveBeenDeleted")} <a href="/repositories">{t("repositoryPage.backToRepositories")}</a>.
+      </EmptyState>
+    );
 
   const columns: Column<Scan>[] = [
     {
@@ -471,20 +566,49 @@ function RepositoryPage({ call, id, reload }: { call: Call; id: string; reload: 
         </a>
       ),
     },
-    { id: "branch", header: t("repositoryPage.branch"), cell: (s) => <span className="sast-wrap font-mono text-xs">{s.pullRequest ? `#${s.pullRequest} ${s.branch}` : s.branch}</span> },
-    { id: "kind", header: t("repositoryPage.kind"), cell: (s) => (s.kind === "baseline" ? <Badge>{t("repositoryPage.baseline")}</Badge> : <Badge tone="info">{t("repositoryPage.change")}</Badge>) },
+    {
+      id: "branch",
+      header: t("repositoryPage.branch"),
+      cell: (s) => <span className="sast-wrap font-mono text-xs">{s.pullRequest ? `#${s.pullRequest} ${s.branch}` : s.branch}</span>,
+    },
+    {
+      id: "kind",
+      header: t("repositoryPage.kind"),
+      cell: (s) => (s.kind === "baseline" ? <Badge>{t("repositoryPage.baseline")}</Badge> : <Badge tone="info">{t("repositoryPage.change")}</Badge>),
+    },
     { id: "total", header: t("repositoryPage.reported"), align: "right", cell: (s) => s.total },
     { id: "new", header: t("repositoryPage.new"), align: "right", cell: (s) => s.new },
     { id: "check", header: t("repositoryPage.check"), cell: (s) => <ScanStatus s={s} /> },
   ];
   return (
     <>
-      <PageHeader title={repo?.name ?? t("repositoryPage.repository")} description={repo ? t("repositoryPage.defaultBranch", { defaultBranch: repo.defaultBranch, plural: t("plurals.openFinding", { count: Object.values(repo.open).reduce((a, b) => a + b, 0) }) }) : undefined} />
+      <PageHeader
+        title={repo?.name ?? t("repositoryPage.repository")}
+        description={
+          repo
+            ? t("repositoryPage.defaultBranch", {
+                defaultBranch: repo.defaultBranch,
+                plural: t("plurals.openFinding", { count: Object.values(repo.open).reduce((a, b) => a + b, 0) }),
+              })
+            : undefined
+        }
+      />
       {can("admin") && repo && (
         <Panel title={t("repositoryPage.policy")} description={t("repositoryPage.whatACheckTreatsAs")}>
           <div className="grid gap-2 sm:grid-cols-2">
-            <SelectField label={t("repositoryPage.failTheCheckFor")} value={failOn} onChange={(e) => setFailOn(e.target.value as FailOn)} options={FAIL_ON(t)} />
-            <TextField label={t("repositoryPage.defaultBranch2")} value={branch} onChange={(e) => setBranch(e.target.value)} hint={t("repositoryPage.itsScansAreTheBaseline")} error={error} />
+            <SelectField
+              label={t("repositoryPage.failTheCheckFor")}
+              value={failOn}
+              onChange={(e) => setFailOn(e.target.value as FailOn)}
+              options={FAIL_ON(t)}
+            />
+            <TextField
+              label={t("repositoryPage.defaultBranch2")}
+              value={branch}
+              onChange={(e) => setBranch(e.target.value)}
+              hint={t("repositoryPage.itsScansAreTheBaseline")}
+              error={error}
+            />
           </div>
           <div className="mt-3 flex gap-2">
             <Button variant="primary" onClick={() => void save()} disabled={failOn === repo.failOn && branch === repo.defaultBranch}>
@@ -516,7 +640,15 @@ function RepositoryPage({ call, id, reload }: { call: Call; id: string; reload: 
       )}
       <FindingsTable call={call} repoId={id} summary={repo ?? undefined} reload={() => (load(), reload())} />
       <Panel title={t("repositoryPage.scans")} flush>
-        <DataTable label={t("repositoryPage.scans")} columns={columns} rows={scans ?? []} loading={!scans} getRowId={(s) => s.id} minWidth={640} empty={<EmptyState title={t("repositoryPage.noScans")}>{t("repositoryPage.nothingHasBeenSentFor")}</EmptyState>} />
+        <DataTable
+          label={t("repositoryPage.scans")}
+          columns={columns}
+          rows={scans ?? []}
+          loading={!scans}
+          getRowId={(s) => s.id}
+          minWidth={640}
+          empty={<EmptyState title={t("repositoryPage.noScans")}>{t("repositoryPage.nothingHasBeenSentFor")}</EmptyState>}
+        />
       </Panel>
     </>
   );
@@ -544,25 +676,48 @@ function ScanPage({ call, id, reload }: { call: Call; id: string; reload: () => 
         </span>
       ),
     },
-    { id: "state", header: t("scanPage.state"), cell: (f) => (f.suppressed ? <Badge>{t("scanPage.triaged")}</Badge> : <Badge tone="danger">{t("scanPage.new")}</Badge>) },
+    {
+      id: "state",
+      header: t("scanPage.state"),
+      cell: (f) => (f.suppressed ? <Badge>{t("scanPage.triaged")}</Badge> : <Badge tone="danger">{t("scanPage.new")}</Badge>),
+    },
   ];
   return (
     <>
       <PageHeader
-        title={scan ? (scan.pullRequest ? t("scanPage.pullRequest", { pullRequest: scan.pullRequest }) : t("scanPage.scanOf", { branch: scan.branch })) : t("scanPage.scan")}
-        description={scan ? `${scan.repository.name} · ${scan.branch}${scan.commit ? ` · ${scan.commit.slice(0, 8)}` : ""} · ${scan.tool} · ${ago(scan.createdAt)}` : undefined}
+        title={
+          scan
+            ? scan.pullRequest
+              ? t("scanPage.pullRequest", { pullRequest: scan.pullRequest })
+              : t("scanPage.scanOf", { branch: scan.branch })
+            : t("scanPage.scan")
+        }
+        description={
+          scan
+            ? `${scan.repository.name} · ${scan.branch}${scan.commit ? ` · ${scan.commit.slice(0, 8)}` : ""} · ${scan.tool} · ${ago(scan.createdAt)}`
+            : undefined
+        }
         actions={scan && <ScanStatus s={scan} />}
       />
       {scan && (
         <KpiGrid minWidth={150}>
           <KpiCard label={t("scanPage.reported")} value={scan.total} />
           <KpiCard label={t("scanPage.new")} value={scan.new} tone={scan.new ? "warning" : "success"} />
-          <KpiCard label={t("scanPage.blocking")} value={scan.blocking} tone={scan.blocking ? "danger" : "success"} footer={<span className="text-xs text-fg-muted">{FAIL_ON(t).find((f) => f.value === scan.failOn)?.label}</span>} />
+          <KpiCard
+            label={t("scanPage.blocking")}
+            value={scan.blocking}
+            tone={scan.blocking ? "danger" : "success"}
+            footer={<span className="text-xs text-fg-muted">{FAIL_ON(t).find((f) => f.value === scan.failOn)?.label}</span>}
+          />
           <KpiCard label={t("scanPage.triaged")} value={scan.suppressed} tone="info" />
         </KpiGrid>
       )}
       <div className={open ? "grid gap-2.5 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]" : "grid gap-2.5"}>
-        <Panel title={t("scanPage.whatThisScanAdded")} description={scan?.kind === "baseline" ? t("scanPage.aScanOfTheDefault") : t("scanPage.findingsTheDefaultBranchDoes")} flush>
+        <Panel
+          title={t("scanPage.whatThisScanAdded")}
+          description={scan?.kind === "baseline" ? t("scanPage.aScanOfTheDefault") : t("scanPage.findingsTheDefaultBranchDoes")}
+          flush
+        >
           <DataTable
             label={t("scanPage.newFindings")}
             columns={columns}
@@ -623,7 +778,11 @@ function WelcomePage() {
   const t = useT();
   return (
     <>
-      <PageHeader title={t("welcomePage.getStarted")} description={t("welcomePage.findingsShowHereAsSoon")} actions={<StatusBadge tone="info">{t("welcomePage.waitingForTheFirstScan")}</StatusBadge>} />
+      <PageHeader
+        title={t("welcomePage.getStarted")}
+        description={t("welcomePage.findingsShowHereAsSoon")}
+        actions={<StatusBadge tone="info">{t("welcomePage.waitingForTheFirstScan")}</StatusBadge>}
+      />
       <SetupPage />
     </>
   );
@@ -638,8 +797,14 @@ function SettingsPage({ page }: { page: "account" | "members" | "signin" | "toke
   if (page !== "account" && !can("admin")) return <EmptyState title={t("settingsPage.adminsOnly")}>{t("settingsPage.askAnAdminOfThis")}</EmptyState>;
   const titles = {
     account: ["Account", "Your profile, password, two-step verification and where you are signed in."],
-    members: ["Members", "Who can sign in to this sast, and with which role. Viewers see everything; editors also triage findings; admins also change policies, delete repositories, and manage members and tokens."],
-    signin: ["Sign-in", "Identity providers people can sign in with, such as OpenAsy Identity, Keycloak or Microsoft Entra ID, and which of their groups give which role."],
+    members: [
+      "Members",
+      "Who can sign in to this sast, and with which role. Viewers see everything; editors also triage findings; admins also change policies, delete repositories, and manage members and tokens.",
+    ],
+    signin: [
+      "Sign-in",
+      "Identity providers people can sign in with, such as OpenAsy Identity, Keycloak or Microsoft Entra ID, and which of their groups give which role.",
+    ],
     tokens: ["API tokens", "For scripts and CI. Each token has one role and an expiry; the secret is shown once."],
   } as const;
   return (

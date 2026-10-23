@@ -53,11 +53,20 @@ describe("scans", () => {
     const [fp] = first.findings.map((f: { fingerprint: string }) => f.fingerprint);
     const repoId = first.repository.id;
 
-    const missing = await app.admin(`/api/v1/repositories/${repoId}/findings/nope`, { method: "PUT", body: JSON.stringify({ state: "false-positive", reason: "static string" }) });
+    const missing = await app.admin(`/api/v1/repositories/${repoId}/findings/nope`, {
+      method: "PUT",
+      body: JSON.stringify({ state: "false-positive", reason: "static string" }),
+    });
     expect(missing.status).toBe(404);
-    const done = await app.admin(`/api/v1/repositories/${repoId}/findings/${fp}`, { method: "PUT", body: JSON.stringify({ state: "false-positive", reason: "Output is escaped by the template" }) });
+    const done = await app.admin(`/api/v1/repositories/${repoId}/findings/${fp}`, {
+      method: "PUT",
+      body: JSON.stringify({ state: "false-positive", reason: "Output is escaped by the template" }),
+    });
     expect(done.status).toBe(200);
-    expect(await json(done)).toMatchObject({ rule: "js.xss", triage: { state: "false-positive", reason: "Output is escaped by the template", by: "admin token", active: true } });
+    expect(await json(done)).toMatchObject({
+      rule: "js.xss",
+      triage: { state: "false-positive", reason: "Output is escaped by the template", by: "admin token", active: true },
+    });
 
     expect(await json(await pull("9", sqli, xss))).toMatchObject({ new: 0, suppressed: 1, blocking: 0, passed: true });
     // The decision shows on the scan page too.
@@ -143,7 +152,12 @@ describe("repositories", () => {
     const repo = (await json(await app.admin("/api/v1/repositories"))).repositories[0];
     const patch = (body: unknown) => app.admin(`/api/v1/repositories/${repo.id}`, { method: "PATCH", body: JSON.stringify(body) });
     expect((await patch({ failOn: "critical" })).status).toBe(200);
-    expect(await json(await pull("12", sqli, style, xss, eval_, { rule: "x.new", level: "error", path: "n.py", code: "bad()" }))).toMatchObject({ new: 1, blocking: 0, passed: true, failOn: "critical" });
+    expect(await json(await pull("12", sqli, style, xss, eval_, { rule: "x.new", level: "error", path: "n.py", code: "bad()" }))).toMatchObject({
+      new: 1,
+      blocking: 0,
+      passed: true,
+      failOn: "critical",
+    });
     await patch({ failOn: "none" });
     expect(await json(await pull("13", { rule: "x.new2", score: 9.5, path: "n.py", code: "worse()" }))).toMatchObject({ new: 1, blocking: 0, passed: true });
     expect((await patch({ failOn: "urgent" })).status).toBe(422);
@@ -187,7 +201,11 @@ describe("sending scans", () => {
   it("asks for the ingest token or an editor", async () => {
     const anon = (await fetch(`${app.base}/api/v1/scans?repository=a&branch=main`, { method: "POST", body: sarif() })).status;
     expect(anon).toBe(401);
-    const wrong = await fetch(`${app.base}/api/v1/scans?repository=a&branch=main`, { method: "POST", body: sarif(), headers: { authorization: "Bearer nope" } });
+    const wrong = await fetch(`${app.base}/api/v1/scans?repository=a&branch=main`, {
+      method: "POST",
+      body: sarif(),
+      headers: { authorization: "Bearer nope" },
+    });
     expect(wrong.status).toBe(401);
     expect((await app.ingest("/api/v1/summary")).status).toBe(401);
     expect((await app.ingest("/api/v1/findings")).status).toBe(401);

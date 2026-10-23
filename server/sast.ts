@@ -3,14 +3,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { parseSarif, SarifError, SEVERITIES, type Finding, type Severity } from "./sarif.ts";
 
 export type ProblemCode =
-  | "invalid-token"
-  | "invalid-json"
-  | "invalid-body"
-  | "invalid-sarif"
-  | "not-found"
-  | "not-configured"
-  | "payload-too-large"
-  | "internal-error";
+  "invalid-token" | "invalid-json" | "invalid-body" | "invalid-sarif" | "not-found" | "not-configured" | "payload-too-large" | "internal-error";
 
 export class SastError extends Error {
   readonly status: number;
@@ -115,15 +108,21 @@ export function createSast(db: DatabaseSync, { retentionDays = 365 }: SastOption
   function openCounts(repoId?: string): Counts {
     const c = zero();
     const rows = db
-      .prepare(`SELECT severity, COUNT(*) AS n FROM findings WHERE resolved_at IS NULL AND NOT ${SUPPRESSED} ${repoId ? "AND repo_id = ?" : ""} GROUP BY severity`)
+      .prepare(
+        `SELECT severity, COUNT(*) AS n FROM findings WHERE resolved_at IS NULL AND NOT ${SUPPRESSED} ${repoId ? "AND repo_id = ?" : ""} GROUP BY severity`,
+      )
       .all(...([now(), ...(repoId ? [repoId] : [])] as SQLInputValue[])) as Array<{ severity: Severity; n: number }>;
     for (const r of rows) c[r.severity] = r.n;
     return c;
   }
 
   function presentRepo(r: Record<string, any>) {
-    const last = db.prepare("SELECT created_at, kind, branch, new_count, blocking FROM scans WHERE repo_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1").get(r.id) as Record<string, any> | undefined;
-    const suppressed = (db.prepare(`SELECT COUNT(*) AS n FROM findings WHERE repo_id = ? AND resolved_at IS NULL AND ${SUPPRESSED}`).get(r.id, now()) as { n: number }).n;
+    const last = db
+      .prepare("SELECT created_at, kind, branch, new_count, blocking FROM scans WHERE repo_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1")
+      .get(r.id) as Record<string, any> | undefined;
+    const suppressed = (
+      db.prepare(`SELECT COUNT(*) AS n FROM findings WHERE repo_id = ? AND resolved_at IS NULL AND ${SUPPRESSED}`).get(r.id, now()) as { n: number }
+    ).n;
     return {
       id: r.id as string,
       name: r.name as string,
@@ -131,7 +130,15 @@ export function createSast(db: DatabaseSync, { retentionDays = 365 }: SastOption
       failOn: r.fail_on as FailOn,
       open: openCounts(r.id),
       suppressed,
-      lastScan: last ? { at: last.created_at as string, kind: last.kind as "baseline" | "change", branch: last.branch as string, new: last.new_count as number, passed: last.blocking === 0 } : null,
+      lastScan: last
+        ? {
+            at: last.created_at as string,
+            kind: last.kind as "baseline" | "change",
+            branch: last.branch as string,
+            new: last.new_count as number,
+            passed: last.blocking === 0,
+          }
+        : null,
       createdAt: r.created_at as string,
     };
   }
@@ -150,7 +157,10 @@ export function createSast(db: DatabaseSync, { retentionDays = 365 }: SastOption
       firstSeen: f.first_seen,
       lastSeen: f.last_seen,
       resolvedAt: f.resolved_at,
-      triage: f.triage === "open" ? null : { state: f.triage as Exclude<Triage, "open">, reason: f.reason!, by: f.triaged_by, at: f.triaged_at, expiresAt: f.expires_at, active },
+      triage:
+        f.triage === "open"
+          ? null
+          : { state: f.triage as Exclude<Triage, "open">, reason: f.reason!, by: f.triaged_by, at: f.triaged_at, expiresAt: f.expires_at, active },
     };
   }
 
@@ -206,7 +216,10 @@ export function createSast(db: DatabaseSync, { retentionDays = 365 }: SastOption
      * Takes a SARIF log from CI. Scans of the default branch become the baseline; every other scan is compared with
      * it, and only findings the baseline does not have, and nobody has triaged, can fail the check.
      */
-    ingest(params: { repository: string | null; branch: string | null; commit?: string | null; pullRequest?: string | null; defaultBranch?: string | null }, raw: Buffer) {
+    ingest(
+      params: { repository: string | null; branch: string | null; commit?: string | null; pullRequest?: string | null; defaultBranch?: string | null },
+      raw: Buffer,
+    ) {
       const name = params.repository;
       if (!name || !REPO_NAME.test(name)) throw bad("repository is required: a name such as acme/web, up to 128 letters, digits, . _ - and /.");
       const branch = params.branch;
@@ -238,7 +251,12 @@ export function createSast(db: DatabaseSync, { retentionDays = 365 }: SastOption
         let repo = db.prepare("SELECT * FROM repositories WHERE name = ?").get(name) as Record<string, string> | undefined;
         if (!repo) {
           const repoId = randomUUID();
-          db.prepare("INSERT INTO repositories (id, name, default_branch, fail_on, created_at) VALUES (?, ?, ?, 'high', ?)").run(repoId, name, params.defaultBranch || "main", at);
+          db.prepare("INSERT INTO repositories (id, name, default_branch, fail_on, created_at) VALUES (?, ?, ?, 'high', ?)").run(
+            repoId,
+            name,
+            params.defaultBranch || "main",
+            at,
+          );
           repo = repoRow(repoId);
         } else if (params.defaultBranch && params.defaultBranch !== repo.default_branch) {
           db.prepare("UPDATE repositories SET default_branch = ? WHERE id = ?").run(params.defaultBranch, repo.id!);
@@ -249,7 +267,13 @@ export function createSast(db: DatabaseSync, { retentionDays = 365 }: SastOption
         const kind = branch === repo.default_branch && !pullRequest ? "baseline" : "change";
 
         const known = new Map<string, { resolved_at: string | null; triage: Triage; expires_at: string | null }>();
-        for (const r of db.prepare("SELECT fingerprint, resolved_at, triage, expires_at FROM findings WHERE repo_id = ?").all(repoId) as Array<{ fingerprint: string; resolved_at: string | null; triage: Triage; expires_at: string | null }>) known.set(r.fingerprint, r);
+        for (const r of db.prepare("SELECT fingerprint, resolved_at, triage, expires_at FROM findings WHERE repo_id = ?").all(repoId) as Array<{
+          fingerprint: string;
+          resolved_at: string | null;
+          triage: Triage;
+          expires_at: string | null;
+        }>)
+          known.set(r.fingerprint, r);
         const triaged = (f: Finding) => {
           const k = known.get(f.fingerprint);
           return !!k && k.triage !== "open" && (!k.expires_at || k.expires_at > at);
@@ -262,7 +286,21 @@ export function createSast(db: DatabaseSync, { retentionDays = 365 }: SastOption
 
         db.prepare(
           "INSERT INTO scans (id, repo_id, kind, branch, commit_sha, pull_request, tool, total, new_count, suppressed, blocking, fail_on, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        ).run(id, repoId, kind, branch, commit, pullRequest, parsed.tool, parsed.findings.length, added.length, fresh.length - added.length, blocking, failOn, at);
+        ).run(
+          id,
+          repoId,
+          kind,
+          branch,
+          commit,
+          pullRequest,
+          parsed.tool,
+          parsed.findings.length,
+          added.length,
+          fresh.length - added.length,
+          blocking,
+          failOn,
+          at,
+        );
 
         if (kind === "baseline") {
           const upsert = db.prepare(
@@ -276,7 +314,9 @@ export function createSast(db: DatabaseSync, { retentionDays = 365 }: SastOption
           // What the default branch no longer reports is fixed.
           db.prepare("UPDATE findings SET resolved_at = ? WHERE repo_id = ? AND resolved_at IS NULL AND last_seen < ?").run(at, repoId, at);
         } else {
-          const insert = db.prepare("INSERT INTO scan_findings (scan_id, fingerprint, rule_id, severity, path, line, message, snippet, suppressed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+          const insert = db.prepare(
+            "INSERT INTO scan_findings (scan_id, fingerprint, rule_id, severity, path, line, message, snippet, suppressed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          );
           for (const f of fresh) insert.run(id, f.fingerprint, f.ruleId, f.severity, f.path, f.line, f.message, f.snippet, triaged(f) ? 1 : 0);
         }
         db.exec("COMMIT");
@@ -342,14 +382,22 @@ export function createSast(db: DatabaseSync, { retentionDays = 365 }: SastOption
     scans(repoId: string, cursor: string | undefined, limit: number) {
       const repo = repoRow(repoId);
       const offset = decodeCursor(cursor);
-      const rows = db.prepare("SELECT * FROM scans WHERE repo_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?").all(repoId, limit + 1, offset) as Array<Record<string, any>>;
-      return { items: rows.slice(0, limit).map((s) => presentScan(s, repo.name!)), ...(rows.length > limit && { nextCursor: encodeCursor(offset + limit) }) } satisfies Page<unknown>;
+      const rows = db
+        .prepare("SELECT * FROM scans WHERE repo_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?")
+        .all(repoId, limit + 1, offset) as Array<Record<string, any>>;
+      return {
+        items: rows.slice(0, limit).map((s) => presentScan(s, repo.name!)),
+        ...(rows.length > limit && { nextCursor: encodeCursor(offset + limit) }),
+      } satisfies Page<unknown>;
     },
 
     scan(id: string) {
-      const s = db.prepare("SELECT s.*, r.name AS repo_name FROM scans s JOIN repositories r ON r.id = s.repo_id WHERE s.id = ?").get(id) as Record<string, any> | undefined;
+      const s = db.prepare("SELECT s.*, r.name AS repo_name FROM scans s JOIN repositories r ON r.id = s.repo_id WHERE s.id = ?").get(id) as
+        Record<string, any> | undefined;
       if (!s) throw notFound("The scan");
-      const findings = (db.prepare(`SELECT * FROM scan_findings WHERE scan_id = ? ORDER BY ${RANK_SQL} DESC, path, line`).all(id) as Array<Record<string, any>>).map((f) => ({
+      const findings = (
+        db.prepare(`SELECT * FROM scan_findings WHERE scan_id = ? ORDER BY ${RANK_SQL} DESC, path, line`).all(id) as Array<Record<string, any>>
+      ).map((f) => ({
         fingerprint: f.fingerprint as string,
         rule: f.rule_id as string,
         severity: f.severity as Severity,
@@ -366,21 +414,26 @@ export function createSast(db: DatabaseSync, { retentionDays = 365 }: SastOption
     triage(repoId: string, fingerprint: string, body: Record<string, unknown>, by: string) {
       repoRow(repoId);
       const { state, reason, expiresAt, ...rest } = body;
-      if (Object.keys(rest).length || typeof state !== "string" || !TRIAGE.includes(state as Triage)) throw bad(`Expected { state, reason?, expiresAt? }; state is one of ${TRIAGE.join(", ")}.`);
+      if (Object.keys(rest).length || typeof state !== "string" || !TRIAGE.includes(state as Triage))
+        throw bad(`Expected { state, reason?, expiresAt? }; state is one of ${TRIAGE.join(", ")}.`);
       const held = db.prepare("SELECT 1 FROM findings WHERE repo_id = ? AND fingerprint = ?").get(repoId, fingerprint);
       if (!held) {
         // A finding of a pull request that has not been merged: keep the triage on a baseline row that starts resolved.
         const s = db
-          .prepare("SELECT sf.* FROM scan_findings sf JOIN scans s ON s.id = sf.scan_id WHERE s.repo_id = ? AND sf.fingerprint = ? ORDER BY s.created_at DESC LIMIT 1")
+          .prepare(
+            "SELECT sf.* FROM scan_findings sf JOIN scans s ON s.id = sf.scan_id WHERE s.repo_id = ? AND sf.fingerprint = ? ORDER BY s.created_at DESC LIMIT 1",
+          )
           .get(repoId, fingerprint) as Record<string, any> | undefined;
         if (!s) throw notFound("The finding");
         const at = now();
-        db.prepare("INSERT INTO findings (repo_id, fingerprint, rule_id, severity, path, line, message, snippet, first_seen, last_seen, resolved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
-          repoId, fingerprint, s.rule_id, s.severity, s.path, s.line, s.message, s.snippet, at, at, at,
-        );
+        db.prepare(
+          "INSERT INTO findings (repo_id, fingerprint, rule_id, severity, path, line, message, snippet, first_seen, last_seen, resolved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ).run(repoId, fingerprint, s.rule_id, s.severity, s.path, s.line, s.message, s.snippet, at, at, at);
       }
       if (state === "open") {
-        db.prepare("UPDATE findings SET triage = 'open', reason = NULL, triaged_by = NULL, triaged_at = NULL, expires_at = NULL WHERE repo_id = ? AND fingerprint = ?").run(repoId, fingerprint);
+        db.prepare(
+          "UPDATE findings SET triage = 'open', reason = NULL, triaged_by = NULL, triaged_at = NULL, expires_at = NULL WHERE repo_id = ? AND fingerprint = ?",
+        ).run(repoId, fingerprint);
       } else {
         // A decision without a reason is lost the day its author leaves (ADR 0036).
         if (typeof reason !== "string" || reason.trim().length < 3 || reason.length > 500) throw bad("reason is required: 3 to 500 characters.");
@@ -393,9 +446,19 @@ export function createSast(db: DatabaseSync, { retentionDays = 365 }: SastOption
         }
         // Accepted risk always ends; a false positive does not need to.
         if (state === "accepted" && !expires) throw bad("expiresAt is required for accepted risk.");
-        db.prepare("UPDATE findings SET triage = ?, reason = ?, triaged_by = ?, triaged_at = ?, expires_at = ? WHERE repo_id = ? AND fingerprint = ?").run(state, reason.trim(), by, now(), expires, repoId, fingerprint);
+        db.prepare("UPDATE findings SET triage = ?, reason = ?, triaged_by = ?, triaged_at = ?, expires_at = ? WHERE repo_id = ? AND fingerprint = ?").run(
+          state,
+          reason.trim(),
+          by,
+          now(),
+          expires,
+          repoId,
+          fingerprint,
+        );
       }
-      const row = db.prepare("SELECT f.*, r.name AS repo_name FROM findings f JOIN repositories r ON r.id = f.repo_id WHERE f.repo_id = ? AND f.fingerprint = ?").get(repoId, fingerprint) as unknown as FindingRow;
+      const row = db
+        .prepare("SELECT f.*, r.name AS repo_name FROM findings f JOIN repositories r ON r.id = f.repo_id WHERE f.repo_id = ? AND f.fingerprint = ?")
+        .get(repoId, fingerprint) as unknown as FindingRow;
       return presentFinding(row);
     },
 

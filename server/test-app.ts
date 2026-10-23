@@ -34,7 +34,9 @@ export function sarif(...results: TestResult[]) {
           message: { text: r.message ?? `${r.rule} matched` },
           ...(r.score !== undefined && { properties: { "security-severity": String(r.score) } }),
           ...(r.suppressed && { suppressions: [{ kind: "inSource" }] }),
-          locations: [{ physicalLocation: { artifactLocation: { uri: r.path }, region: { startLine: r.line ?? 1, ...(r.code && { snippet: { text: r.code } }) } } }],
+          locations: [
+            { physicalLocation: { artifactLocation: { uri: r.path }, region: { startLine: r.line ?? 1, ...(r.code && { snippet: { text: r.code } }) } } },
+          ],
         })),
       },
     ],
@@ -51,7 +53,10 @@ export async function startApp(opts: Partial<AppOptions> & { version: string }) 
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const auth = createAuth({ db, product: "sast", productName: "OpenAsy SAST", origin: base });
   handler = createApp({ db, sast, auth, ingestToken: INGEST_TOKEN, adminToken: ADMIN_TOKEN, ...opts });
-  const as = (token: string) => (path: string, init: RequestInit = {}) => fetch(base + path, { ...init, headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...init.headers } });
+  const as =
+    (token: string) =>
+    (path: string, init: RequestInit = {}) =>
+      fetch(base + path, { ...init, headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...init.headers } });
   const admin = as(ADMIN_TOKEN);
   const ingest = as(INGEST_TOKEN);
   /** Sends a scan the way CI does. */

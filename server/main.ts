@@ -58,11 +58,13 @@ const metricsServer = metricsPort !== undefined ? createServer(createMetricsHand
 metricsServer?.listen(metricsPort, () => log("info", "metrics on their own port", { port: metricsPort }));
 
 server.listen(port, () => log("info", "sast started", { version, port, db: dbPath, headless, retentionDays }));
-if (!process.env.SAST_INGEST_TOKEN) log("warn", "SAST_INGEST_TOKEN is not set; CI needs an API token with the editor role (Settings, API tokens) to send scans");
+if (!process.env.SAST_INGEST_TOKEN)
+  log("warn", "SAST_INGEST_TOKEN is not set; CI needs an API token with the editor role (Settings, API tokens) to send scans");
 if (!publicUrl.startsWith("https://") && !/^http:\/\/(localhost|127\.0\.0\.1)(:|$)/.test(publicUrl)) {
   log("warn", "SAST_PUBLIC_URL is not https: browsers will not keep secure cookies or allow passkeys. Put sast behind TLS (ADR 0026)", { url: publicUrl });
 }
-if (auth.secretsInClear) log("warn", "no secrets key: TOTP secrets are stored unencrypted. Mount a 32-byte key (openssl rand -hex 32)", { file: secretsKeyFile });
+if (auth.secretsInClear)
+  log("warn", "no secrets key: TOTP secrets are stored unencrypted. Mount a 32-byte key (openssl rand -hex 32)", { file: secretsKeyFile });
 const setup = auth.setupLink();
 // No default password (ADR 0013): the first person to open this link becomes the owner.
 if (setup) log("info", "no owner yet: open this link once to create the owner account", { url: setup });

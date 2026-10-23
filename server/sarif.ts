@@ -42,14 +42,19 @@ export function normalizePath(uri: string): string {
   } catch {
     // keep it as sent
   }
-  return path.replace(/^file:\/\/\/?/, "").replace(/^(\.\/)+/, "").replace(/\\/g, "/").slice(0, 1024);
+  return path
+    .replace(/^file:\/\/\/?/, "")
+    .replace(/^(\.\/)+/, "")
+    .replace(/\\/g, "/")
+    .slice(0, 1024);
 }
 
 const squash = (s: string) => s.replace(/\s+/g, " ").trim();
 
 /** Reads the results of a SARIF 2.1.0 log. Results the tool itself marks as suppressed are left out. */
 export function parseSarif(body: unknown): { tool: string; findings: Finding[] } {
-  if (!isObj(body) || !Array.isArray(body.runs)) throw new SarifError("Send a SARIF 2.1.0 log: a JSON object with a runs array, for example from `opengrep scan --sarif`.");
+  if (!isObj(body) || !Array.isArray(body.runs))
+    throw new SarifError("Send a SARIF 2.1.0 log: a JSON object with a runs array, for example from `opengrep scan --sarif`.");
   if (typeof body.version === "string" && !body.version.startsWith("2.1")) throw new SarifError(`SARIF ${body.version} is not supported; send version 2.1.0.`);
   const tools: string[] = [];
   const found: Omit<Finding, "fingerprint">[] = [];
@@ -65,11 +70,21 @@ export function parseSarif(body: unknown): { tool: string; findings: Finding[] }
       if (found.length >= MAX_RESULTS) throw new SarifError(`A scan may hold at most ${MAX_RESULTS} results.`);
       const ruleId = text(result.ruleId ?? (isObj(result.rule) ? result.rule.id : undefined), 256) ?? "unknown";
       const rule = rules.get(ruleId);
-      const location = Array.isArray(result.locations) && isObj(result.locations[0]) && isObj(result.locations[0].physicalLocation) ? result.locations[0].physicalLocation : {};
+      const location =
+        Array.isArray(result.locations) && isObj(result.locations[0]) && isObj(result.locations[0].physicalLocation)
+          ? result.locations[0].physicalLocation
+          : {};
       const uri = text(isObj(location.artifactLocation) ? location.artifactLocation.uri : undefined, 2048);
       if (!uri) continue; // a result without a file cannot be followed from one scan to the next
       const region = isObj(location.region) ? location.region : {};
-      const snippet = text(isObj(region.snippet) ? region.snippet.text : isObj(location.contextRegion) && isObj(location.contextRegion.snippet) ? location.contextRegion.snippet.text : undefined, 2000);
+      const snippet = text(
+        isObj(region.snippet)
+          ? region.snippet.text
+          : isObj(location.contextRegion) && isObj(location.contextRegion.snippet)
+            ? location.contextRegion.snippet.text
+            : undefined,
+        2000,
+      );
       const severity =
         fromScore(isObj(result.properties) ? result.properties["security-severity"] : undefined) ??
         fromScore(isObj(rule?.properties) ? rule!.properties["security-severity"] : undefined) ??
@@ -79,7 +94,10 @@ export function parseSarif(body: unknown): { tool: string; findings: Finding[] }
         severity,
         path: normalizePath(uri),
         line: Number.isInteger(region.startLine) && region.startLine > 0 ? region.startLine : null,
-        message: text(isObj(result.message) ? (result.message.text ?? result.message.markdown) : undefined, 1000) ?? text(isObj(rule?.shortDescription) ? rule!.shortDescription.text : undefined, 1000) ?? ruleId,
+        message:
+          text(isObj(result.message) ? (result.message.text ?? result.message.markdown) : undefined, 1000) ??
+          text(isObj(rule?.shortDescription) ? rule!.shortDescription.text : undefined, 1000) ??
+          ruleId,
         snippet,
       });
     }
@@ -88,7 +106,10 @@ export function parseSarif(body: unknown): { tool: string; findings: Finding[] }
   // that adds a second copy is new.
   const seen = new Map<string, number>();
   const findings = found.map((f): Finding => {
-    const base = createHash("sha256").update(`${f.ruleId}\n${f.path}\n${squash(f.snippet ?? f.message)}`).digest("hex").slice(0, 32);
+    const base = createHash("sha256")
+      .update(`${f.ruleId}\n${f.path}\n${squash(f.snippet ?? f.message)}`)
+      .digest("hex")
+      .slice(0, 32);
     const n = (seen.get(base) ?? 0) + 1;
     seen.set(base, n);
     return { ...f, fingerprint: n === 1 ? base : `${base}-${n}` };

@@ -9,7 +9,15 @@ describe("parseSarif", () => {
     const { tool, findings } = parse({ rule: "js.eval", level: "error", path: "src/a.js", line: 7, code: "eval(x)", message: "eval of input" });
     expect(tool).toBe("opengrep");
     expect(findings).toEqual([
-      { fingerprint: expect.stringMatching(/^[0-9a-f]{32}$/), ruleId: "js.eval", severity: "high", path: "src/a.js", line: 7, message: "eval of input", snippet: "eval(x)" },
+      {
+        fingerprint: expect.stringMatching(/^[0-9a-f]{32}$/),
+        ruleId: "js.eval",
+        severity: "high",
+        path: "src/a.js",
+        line: 7,
+        message: "eval of input",
+        snippet: "eval(x)",
+      },
     ]);
   });
 
@@ -44,7 +52,9 @@ describe("parseSarif", () => {
     // Whitespace in the code does not matter; the rule and the file do.
     expect(parse({ rule: "r", path: "a.py", code: "os.system(  cmd )" }).findings[0]!.fingerprint).not.toBe(at(1));
     expect(parse({ rule: "r", path: "b.py", code: "os.system(cmd)" }).findings[0]!.fingerprint).not.toBe(at(1));
-    expect(parse({ rule: "r", path: "a.py", code: "os.system(\n  cmd)" }).findings[0]!.fingerprint).toBe(parse({ rule: "r", path: "a.py", code: "os.system( cmd)" }).findings[0]!.fingerprint);
+    expect(parse({ rule: "r", path: "a.py", code: "os.system(\n  cmd)" }).findings[0]!.fingerprint).toBe(
+      parse({ rule: "r", path: "a.py", code: "os.system( cmd)" }).findings[0]!.fingerprint,
+    );
   });
 
   it("refuses what is not SARIF 2.1", () => {
