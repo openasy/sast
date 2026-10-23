@@ -68,7 +68,7 @@ backups.
 | `SAST_RETENTION_DAYS` | `365` | Scans, and fixed findings nobody triaged, older than this are deleted |
 | `SAST_METRICS_PORT` | | Serve `/metrics` on this port only (ADR 0026) |
 | `SAST_HEADLESS` | `false` | `true` serves only the API |
-| `SAST_PASSWORD_SIGN_IN`, `SAST_OIDC_*` | | Sign-in, as in every OpenAsy product ([@openasy/auth](https://github.com/openasy/auth)). Owners can also add identity providers under Settings, Sign-in |
+| `SAST_PASSWORD_SIGN_IN`, `OPENASY_OIDC_*` | | Sign-in, as in every OpenAsy product ([@openasy/auth](https://github.com/openasy/auth)). Owners can also add identity providers under Settings, Sign-in |
 
 The container runs as non-root with a read-only root filesystem, no capabilities and `no-new-privileges`.
 
