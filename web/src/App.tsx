@@ -291,7 +291,7 @@ function FindingsTable({ call, repoId, summary, reload }: { call: Call; repoId?:
       width: "32%",
       cell: (f) => (
         <span className="flex min-w-0 flex-col">
-          <button type="button" className="sast-wrap self-start text-left font-mono text-xs font-medium text-fg hover:underline">
+          <button type="button" onClick={() => setOpen(f)} className="sast-wrap self-start text-left font-mono text-xs font-medium text-fg hover:underline">
             {f.rule}
           </button>
           <span className="sast-clamp text-xs text-fg-muted" title={f.message}>
