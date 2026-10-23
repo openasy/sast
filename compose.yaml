@@ -5,7 +5,7 @@
 #   docker compose logs sast | grep 'no owner yet'   # the one-time link that creates the owner account
 services:
   sast:
-    image: ghcr.io/openasy/sast:0.2.0
+    image: ghcr.io/openasy/sast:0.3.0
     restart: unless-stopped
     read_only: true
     cap_drop: [ALL]
