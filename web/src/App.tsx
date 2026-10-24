@@ -30,7 +30,24 @@ import {
   useAgo,
 } from "@openasy/ui";
 import { AccountSettings, AuthGate, MembersSettings, SignInSettings, TokensSettings, useAuth, useInstallBrand } from "@openasy/auth/react";
-import { Bug, CircleSlash, FolderGit2, GitBranch, KeyRound, LogIn, LogOut, Play, Plus, RefreshCw, Settings2, Trash2, UserRound, Users, X } from "lucide-react";
+import {
+  Bug,
+  CircleSlash,
+  FolderGit2,
+  GitBranch,
+  KeyRound,
+  LogIn,
+  LogOut,
+  Play,
+  Plus,
+  RefreshCw,
+  ScrollText,
+  Settings2,
+  Trash2,
+  UserRound,
+  Users,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import {
   api,
@@ -38,6 +55,8 @@ import {
   type Agent,
   type Connection,
   type Job,
+  type OwnRule,
+  type RuleList,
   Unauthorized,
   type FailOn,
   type Finding,
@@ -50,7 +69,7 @@ import {
 } from "./api.ts";
 import { useT, type T } from "./i18n.ts";
 
-const PAGES = ["repositories", "github", "setup", "account", "members", "signin", "tokens"] as const;
+const PAGES = ["repositories", "github", "rules", "setup", "account", "members", "signin", "tokens"] as const;
 type Route = { page: "findings" | (typeof PAGES)[number] } | { page: "repository" | "scan"; id: string };
 /** The first path segments that are pages of this UI, for followLinks. */
 export const PATHS = ["findings", "repositories", "scans", ...PAGES];
@@ -149,6 +168,13 @@ function FindingPanel({ finding, call, onClose, onChanged }: { finding: Detail; 
     }
   };
   const reopen = () => call(url, { method: "PUT", body: JSON.stringify({ state: "open" }) }).then(onChanged, () => {});
+  const [switchedOff, setSwitchedOff] = useState(false);
+  // Agent scans stop reporting this rule; scans CI sends use CI's own rules.
+  const switchOff = async () => {
+    const { disabled } = await call<RuleList>("/api/v1/rules");
+    await call("/api/v1/rules/disabled", { method: "PUT", body: JSON.stringify({ disabled: [...disabled, finding.rule] }) });
+    setSwitchedOff(true);
+  };
   const t = finding.triage;
 
   return (
@@ -199,6 +225,11 @@ function FindingPanel({ finding, call, onClose, onChanged }: { finding: Detail; 
             {t && (
               <Button size="sm" onClick={() => void reopen()}>
                 {msg("findingPanel.openAgain")}
+              </Button>
+            )}
+            {can("admin") && (
+              <Button size="sm" onClick={() => void switchOff()} disabled={switchedOff}>
+                {switchedOff ? msg("findingPanel.ruleOff") : msg("findingPanel.switchRuleOff")}
               </Button>
             )}
           </div>
@@ -795,6 +826,181 @@ function ScanPage({ call, id, reload }: { call: Call; id: string; reload: () => 
   );
 }
 
+// ---------------------------------------------------------------- Rules
+
+const RULE_TEMPLATE = `rules:
+  - id: acme.no-console-log
+    message: Remove console.log before it ships.
+    severity: WARNING
+    languages: [javascript, typescript]
+    pattern: console.log(...)
+`;
+
+/** Rules the install writes for sast-agent's scans, and rules switched off (ADR 0036). */
+function RulesPage({ call }: { call: Call }) {
+  const t = useT();
+  const [rules, setRules] = useState<RuleList>();
+  const [editing, setEditing] = useState<{ id?: string; name: string; yaml: string }>();
+  const [ruleId, setRuleId] = useState("");
+  const [error, setError] = useState<string>();
+  const load = useCallback(
+    () =>
+      void call<RuleList>("/api/v1/rules").then(
+        (r) => setRules(r),
+        () => setRules({ own: [], disabled: [] }),
+      ),
+    [call],
+  );
+  useEffect(load, [load]);
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!editing) return;
+    try {
+      if (editing.id) await call(`/api/v1/rules/${editing.id}`, { method: "PUT", body: JSON.stringify({ yaml: editing.yaml }) });
+      else await call("/api/v1/rules", { method: "POST", body: JSON.stringify({ name: editing.name.trim(), yaml: editing.yaml }) });
+      setEditing(undefined);
+      setError(undefined);
+      load();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+  const remove = (r: OwnRule) => call(`/api/v1/rules/${r.id}`, { method: "DELETE" }).then(load, () => {});
+  const setDisabled = async (disabled: string[]) => {
+    try {
+      await call("/api/v1/rules/disabled", { method: "PUT", body: JSON.stringify({ disabled }) });
+      setRuleId("");
+      setError(undefined);
+      load();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+  const columns: Column<OwnRule>[] = [
+    {
+      id: "name",
+      header: t("rulesPage.name"),
+      cell: (r) => (
+        <button
+          type="button"
+          className="font-mono text-xs font-medium text-fg hover:underline"
+          onClick={() => setEditing({ id: r.id, name: r.name, yaml: r.yaml })}
+        >
+          {r.name}
+        </button>
+      ),
+    },
+    { id: "ids", header: t("rulesPage.rules"), cell: (r) => <span className="sast-wrap font-mono text-xs">{ruleIds(r.yaml).join(", ") || "–"}</span> },
+    {
+      id: "remove",
+      header: <span className="sr-only">{t("rulesPage.actions")}</span>,
+      width: "56px",
+      cell: (r) => (
+        <IconButton label={t("rulesPage.remove", { name: r.name })} size="sm" onClick={() => void remove(r)}>
+          <Trash2 />
+        </IconButton>
+      ),
+    },
+  ];
+  return (
+    <>
+      <PageHeader
+        title={t("rulesPage.title")}
+        description={t("rulesPage.description")}
+        actions={
+          <Button variant="primary" icon={<Plus />} onClick={() => setEditing({ name: "", yaml: RULE_TEMPLATE })}>
+            {t("rulesPage.add")}
+          </Button>
+        }
+      />
+      <Panel title={t("rulesPage.own")} description={t("rulesPage.ownDescription")} flush>
+        <DataTable
+          label={t("rulesPage.own")}
+          columns={columns}
+          rows={rules?.own ?? []}
+          loading={!rules}
+          getRowId={(r) => r.id}
+          minWidth={520}
+          empty={<EmptyState title={t("rulesPage.noOwn")}>{t("rulesPage.noOwnDetail")}</EmptyState>}
+        />
+      </Panel>
+      <Panel title={t("rulesPage.disabled")} description={t("rulesPage.disabledDescription")}>
+        <div className="flex flex-col gap-2">
+          {rules && rules.disabled.length === 0 && <p className="m-0 text-sm text-fg-muted">{t("rulesPage.noneDisabled")}</p>}
+          {rules?.disabled.map((id) => (
+            <div key={id} className="flex items-center gap-2">
+              <Badge mono>{id}</Badge>
+              <IconButton label={t("rulesPage.enable", { id })} size="sm" onClick={() => void setDisabled(rules.disabled.filter((x) => x !== id))}>
+                <X />
+              </IconButton>
+            </div>
+          ))}
+          <form
+            className="flex flex-wrap items-end gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void setDisabled([...(rules?.disabled ?? []), ruleId.trim()]);
+            }}
+          >
+            <TextField
+              label={t("rulesPage.ruleId")}
+              value={ruleId}
+              onChange={(e) => setRuleId(e.target.value)}
+              placeholder="openasy.javascript.eval"
+              mono
+              error={editing ? undefined : error}
+            />
+            <Button type="submit" icon={<CircleSlash />} disabled={!ruleId.trim()}>
+              {t("rulesPage.switchOff")}
+            </Button>
+          </form>
+        </div>
+      </Panel>
+      <Dialog
+        open={!!editing}
+        onOpenChange={(open) => !open && (setEditing(undefined), setError(undefined))}
+        title={editing?.id ? editing.name : t("rulesPage.add")}
+        description={t("rulesPage.editDescription")}
+        onSubmit={save}
+        footer={
+          <>
+            <Button type="button" onClick={() => (setEditing(undefined), setError(undefined))}>
+              {t("rulesPage.cancel")}
+            </Button>
+            <Button type="submit" variant="primary">
+              {t("rulesPage.save")}
+            </Button>
+          </>
+        }
+      >
+        {!editing?.id && (
+          <TextField
+            label={t("rulesPage.name")}
+            value={editing?.name ?? ""}
+            onChange={(e) => setEditing((x) => x && { ...x, name: e.target.value })}
+            hint={t("rulesPage.nameHint")}
+            mono
+          />
+        )}
+        <label className="flex flex-col gap-1 text-sm">
+          <span>{t("rulesPage.yaml")}</span>
+          <textarea
+            className="sast-editor"
+            rows={16}
+            spellCheck={false}
+            value={editing?.yaml ?? ""}
+            onChange={(e) => setEditing((x) => x && { ...x, yaml: e.target.value })}
+          />
+        </label>
+        {error && <span className="text-xs text-danger">{error}</span>}
+      </Dialog>
+    </>
+  );
+}
+
+/** The ids a rule file declares, for the list; Opengrep reads the file itself. */
+const ruleIds = (yaml: string) => [...yaml.matchAll(/^\s*-\s*id:\s*([^\s#]+)/gm)].map((m) => m[1]!);
+
 // ---------------------------------------------------------------- GitHub
 
 const JOB_TONE = { queued: "neutral", running: "info", done: "success", failed: "danger" } as const;
@@ -937,6 +1143,7 @@ function GithubPage({ call, reload }: { call: Call; reload: () => void }) {
       header: t("githubPage.commit"),
       cell: (j) => (
         <span className="font-mono text-xs">
+          {j.pullRequest ? `#${j.pullRequest} ` : ""}
           {j.branch} {j.commit.slice(0, 8)}
         </span>
       ),
@@ -955,6 +1162,7 @@ function GithubPage({ call, reload }: { call: Call; reload: () => void }) {
               <StatusBadge tone={JOB_TONE[j.status]}>{t(`githubPage.job.${j.status}`)}</StatusBadge>
             </span>
             {j.error && <span className="sast-clamp text-xs text-fg-muted">{j.error}</span>}
+            {j.checkError && <span className="sast-clamp text-xs text-fg-muted">{j.checkError}</span>}
           </span>
         ),
     },
@@ -1235,6 +1443,7 @@ function Product() {
     ...(can("admin")
       ? [
           { id: "github", label: msg("product.github"), icon: GitBranch },
+          { id: "rules", label: msg("product.rules"), icon: ScrollText },
           { id: "members", label: msg("product.members"), icon: Users },
           { id: "signin", label: msg("product.signIn"), icon: LogIn },
           { id: "tokens", label: msg("product.apiTokens"), icon: KeyRound },
@@ -1267,6 +1476,12 @@ function Product() {
         <FindingsPage call={call} summary={summary} reload={reload} />
       ) : route.page === "repositories" ? (
         <RepositoriesPage call={call} />
+      ) : route.page === "rules" ? (
+        can("admin") ? (
+          <RulesPage call={call} />
+        ) : (
+          <EmptyState title={msg("settingsPage.adminsOnly")}>{msg("settingsPage.askAnAdminOfThis")}</EmptyState>
+        )
       ) : route.page === "github" ? (
         can("admin") ? (
           <GithubPage call={call} reload={reload} />

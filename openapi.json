@@ -40,6 +40,10 @@
     {
       "name": "Agents",
       "description": "sast-agent: enrols once, asks for scan jobs and sends what it found."
+    },
+    {
+      "name": "Rules",
+      "description": "Rules the install writes, and rules switched off (ADR 0036)."
     }
   ],
   "paths": {
@@ -1777,6 +1781,267 @@
           }
         }
       }
+    },
+    "/api/v1/rules": {
+      "get": {
+        "operationId": "listRules",
+        "tags": [
+          "Rules"
+        ],
+        "summary": "List own rules and switched off rules",
+        "description": "The rule files the install wrote, and the rule ids no scan reports. OpenAsy's own rules and the rule sources always run, except the ids switched off.",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rules.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createRule",
+        "tags": [
+          "Rules"
+        ],
+        "summary": "Add a rule file",
+        "description": "An Opengrep rule file of up to 256 KiB, sent to the agent with each job. Opengrep reads it at the next scan; a rule it cannot read fails that scan, and the job says why. At most 100 files. Needs the admin role.",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewRule"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Added.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnRule"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "413": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/rules/disabled": {
+      "put": {
+        "operationId": "setDisabledRules",
+        "tags": [
+          "Rules"
+        ],
+        "summary": "Switch rules off",
+        "description": "Rule ids, as findings show them, that no scan reports from now on: a noisy shipped rule or one from a rule source. Replaces the list. Needs the admin role.",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DisabledRules"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The list now.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisabledRules"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/rules/{id}": {
+      "put": {
+        "operationId": "updateRule",
+        "tags": [
+          "Rules"
+        ],
+        "summary": "Change a rule file",
+        "description": "Needs the admin role.",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRule"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Changed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnRule"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "413": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteRule",
+        "tags": [
+          "Rules"
+        ],
+        "summary": "Remove a rule file",
+        "description": "Findings it made stay until the next scan of the default branch marks them fixed. Needs the admin role.",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed."
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2720,6 +2985,8 @@
           "attempts",
           "error",
           "scanId",
+          "pullRequest",
+          "checkError",
           "createdAt",
           "finishedAt"
         ],
@@ -2759,6 +3026,20 @@
               "string",
               "null"
             ]
+          },
+          "pullRequest": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The pull request scanned, by number; null for the default branch. Its result is posted to GitHub as the commit status OpenAsy SAST."
+          },
+          "checkError": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the result could not be posted to the pull request, as a commit status or as its comment, such as a token without that permission."
           },
           "createdAt": {
             "type": "string",
@@ -2954,7 +3235,9 @@
                 "branch",
                 "commit",
                 "token",
-                "ruleSources"
+                "ruleSources",
+                "ownRules",
+                "disabledRules"
               ],
               "properties": {
                 "id": {
@@ -2981,6 +3264,32 @@
                   "items": {
                     "type": "string"
                   }
+                },
+                "ownRules": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "name",
+                      "yaml"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "yaml": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "disabledRules": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Rule ids Opengrep skips."
                 }
               }
             }
@@ -3004,6 +3313,101 @@
         "properties": {
           "error": {
             "type": "string"
+          }
+        }
+      },
+      "OwnRule": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "yaml",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "yaml": {
+            "type": "string",
+            "description": "An Opengrep rule file."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RuleList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "own",
+          "disabled"
+        ],
+        "properties": {
+          "own": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OwnRule"
+            }
+          },
+          "disabled": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "NewRule": {
+        "type": "object",
+        "required": [
+          "name",
+          "yaml"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+          },
+          "yaml": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateRule": {
+        "type": "object",
+        "required": [
+          "yaml"
+        ],
+        "properties": {
+          "yaml": {
+            "type": "string"
+          }
+        }
+      },
+      "DisabledRules": {
+        "type": "object",
+        "required": [
+          "disabled"
+        ],
+        "properties": {
+          "disabled": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+              "type": "string"
+            }
           }
         }
       }

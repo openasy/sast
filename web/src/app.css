@@ -20,3 +20,23 @@
   margin: 0;
   padding: 0;
 }
+
+/* A rule file being written: monospace, in the library's surface and line colours. */
+.sast-editor {
+  width: 100%;
+  min-height: 16rem;
+  resize: vertical;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--oa-line);
+  border-radius: 0.375rem;
+  background: var(--oa-surface);
+  color: var(--oa-fg);
+  font-family: var(--oa-font-mono);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.sast-editor:focus {
+  outline: 2px solid var(--oa-accent);
+  outline-offset: 1px;
+}

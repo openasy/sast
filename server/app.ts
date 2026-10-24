@@ -73,6 +73,8 @@ const SECURITY_HEADERS = {
 
 /** Largest SARIF log accepted, after decompression. */
 const SARIF_LIMIT = 64 * 1024 * 1024;
+/** A rule file of 256 KiB, as JSON. */
+const RULE_LIMIT = 300 * 1024;
 
 function send(res: ServerResponse, status: number, body: string | Buffer, type = "application/json", headers: Record<string, string> = {}) {
   res.writeHead(status, { ...SECURITY_HEADERS, ...headers, "content-type": type, "content-length": Buffer.byteLength(body) });
@@ -161,7 +163,7 @@ interface Ctx {
   res: ServerResponse;
   url: URL;
   params: string[];
-  body: () => Promise<Record<string, unknown>>;
+  body: (limit?: number) => Promise<Record<string, unknown>>;
   /** Who made the request, for the audit trail of a decision. */
   actor: () => string;
   /** On "agent" routes: the enrolled sast-agent that sent the request. */
@@ -247,6 +249,17 @@ export function createApp({
     },
     { method: "DELETE", path: "/api/v1/connections/:id", auth: "owner", handle: ({ res, params }) => (forge.deleteConnection(params[0]!), noContent(res)) },
     { method: "POST", path: "/api/v1/connections/sync", auth: "admin", handle: async () => (await forge.poll(), { connections: forge.listConnections() }) },
+    // Rules the install writes, and rules switched off (ADR 0036).
+    { method: "GET", path: "/api/v1/rules", auth: "viewer", handle: () => forge.listRules() },
+    { method: "POST", path: "/api/v1/rules", auth: "admin", handle: async ({ res, body }) => json(res, 201, forge.createRule(await body(RULE_LIMIT))) },
+    {
+      method: "PUT",
+      path: "/api/v1/rules/disabled",
+      auth: "admin",
+      handle: async ({ body }) => ({ disabled: forge.setDisabledRules((await body()).disabled) }),
+    },
+    { method: "PUT", path: "/api/v1/rules/:id", auth: "admin", handle: async ({ params, body }) => forge.updateRule(params[0]!, await body(RULE_LIMIT)) },
+    { method: "DELETE", path: "/api/v1/rules/:id", auth: "admin", handle: ({ res, params }) => (forge.deleteRule(params[0]!), noContent(res)) },
     { method: "GET", path: "/api/v1/rule-sources", auth: "viewer", handle: () => ({ ruleSources: forge.ruleSources() }) },
     {
       method: "PUT",
@@ -266,13 +279,13 @@ export function createApp({
       method: "POST",
       path: "/api/v1/agent/jobs/:id/sarif",
       auth: "agent",
-      handle: async ({ req, agent, params }) => forge.complete(agent, params[0]!, await readBody(req, SARIF_LIMIT)),
+      handle: async ({ req, agent, params }) => await forge.complete(agent, params[0]!, await readBody(req, SARIF_LIMIT)),
     },
     {
       method: "POST",
       path: "/api/v1/agent/jobs/:id/failed",
       auth: "agent",
-      handle: async ({ res, agent, params, body }) => (forge.fail(agent, params[0]!, await body()), noContent(res)),
+      handle: async ({ res, agent, params, body }) => (await forge.fail(agent, params[0]!, await body()), noContent(res)),
     },
 
     // Repositories.
@@ -376,7 +389,15 @@ export function createApp({
       try {
         const who = authorize(req, r.auth);
         const params = m.slice(1).map(decodeURIComponent);
-        const result = await r.handle({ req, res, url, params, body: () => readJson(req), actor: () => who ?? "unknown", agent: who ?? "" });
+        const result = await r.handle({
+          req,
+          res,
+          url,
+          params,
+          body: (limit?: number) => readJson(req, limit),
+          actor: () => who ?? "unknown",
+          agent: who ?? "",
+        });
         if (!res.headersSent && result !== undefined) json(res, 200, result);
       } catch (err) {
         if (err instanceof AuthError) {

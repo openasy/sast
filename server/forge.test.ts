@@ -171,6 +171,28 @@ describe("repositories from GitHub, scanned by sast-agent (ADR 0036)", () => {
     expect(await json(res)).toMatchObject({ repository: "acme/web", status: "queued" });
   });
 
+  it("sends the install's own rules and the rules switched off with each job", async () => {
+    const yaml = "rules:\n  - id: acme.todo\n    pattern-regex: TODO\n    message: A TODO\n    languages: [generic]\n    severity: INFO\n";
+    expect((await post("/api/v1/rules", { name: "todo", yaml })).status).toBe(201);
+    expect((await post("/api/v1/rules", { name: "todo", yaml })).status).toBe(409);
+    expect((await post("/api/v1/rules", { name: "x", yaml: "not a rule file" })).status).toBe(422);
+    const res = await app.admin("/api/v1/rules/disabled", {
+      method: "PUT",
+      body: JSON.stringify({ disabled: ["openasy.javascript.eval", "openasy.javascript.eval"] }),
+    });
+    expect(await json(res)).toEqual({ disabled: ["openasy.javascript.eval"] });
+    await app.forge.scanNow(
+      ((await json(await app.admin("/api/v1/repositories"))).repositories as Array<Record<string, any>>).find((r) => r.name === "acme/web")!.id,
+    );
+    const { jobs } = await json(await agent("/api/v1/agent/work", { body: "{}" }));
+    expect(jobs[0]).toMatchObject({ ownRules: [{ name: "todo", yaml }], disabledRules: ["openasy.javascript.eval"] });
+    await agent(`/api/v1/agent/jobs/${jobs[0].id}/failed`, { body: JSON.stringify({ error: "not now" }) });
+    // Leave a job waiting, as the next test expects.
+    await app.forge.scanNow(
+      ((await json(await app.admin("/api/v1/repositories"))).repositories as Array<Record<string, any>>).find((r) => r.name === "acme/web")!.id,
+    );
+  });
+
   it("takes rule sources an install adds, and sends them with each job", async () => {
     expect((await app.admin("/api/v1/rule-sources", { method: "PUT", body: JSON.stringify({ ruleSources: ["git@github.com:x/y.git"] }) })).status).toBe(422);
     const res = await app.admin("/api/v1/rule-sources", { method: "PUT", body: JSON.stringify({ ruleSources: ["https://github.com/acme/rules"] }) });
@@ -185,5 +207,128 @@ describe("repositories from GitHub, scanned by sast-agent (ADR 0036)", () => {
     expect((await app.admin(`/api/v1/connections/${c.id}`, { method: "DELETE" })).status).toBe(204);
     const repos = (await json(await app.admin("/api/v1/repositories"))).repositories as Array<Record<string, any>>;
     expect(repos.map((r) => `${r.name} ${r.source}`)).toEqual(["acme/api ci", "acme/web ci"]);
+  });
+});
+
+describe("pull requests of a connected repository (ADR 0036)", () => {
+  const head = "e".repeat(40);
+  let prHead = head;
+  const statuses: Array<{ path: string; body: Record<string, unknown> }> = [];
+  const comments: Array<{ method: string; path: string; body: string }> = [];
+  let mayPost = true;
+  const server: Server = createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const c of req) chunks.push(c as Buffer);
+    if (req.headers.authorization !== `Bearer ${TOKEN}`) return res.writeHead(401).end("{}");
+    const send = (body: unknown, status = 200) => res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
+    const url = new URL(req.url!, "http://x");
+    if (url.pathname === "/user") return send({ login: "dev" });
+    if (url.pathname === "/user/repos")
+      return send([
+        {
+          full_name: "acme/web",
+          owner: { login: "acme" },
+          clone_url: "https://github.com/acme/web.git",
+          default_branch: "main",
+          archived: false,
+          pushed_at: "2026-10-20T10:00:00Z",
+        },
+      ]);
+    if (url.pathname === "/repos/acme/web/branches/main") return send({ name: "main", commit: { sha: "a".repeat(40) } });
+    if (url.pathname === "/repos/acme/web/pulls")
+      return send([
+        { number: 7, head: { sha: prHead, ref: "feature/login" }, base: { ref: "main" } },
+        { number: 8, head: { sha: "f".repeat(40), ref: "x" }, base: { ref: "release" } },
+      ]);
+    if (url.pathname === "/repos/acme/web/issues/7/comments" || url.pathname === "/repos/acme/web/issues/comments/99") {
+      comments.push({ method: req.method!, path: url.pathname, body: JSON.parse(Buffer.concat(chunks).toString("utf8")).body });
+      return send({ id: 99 }, req.method === "POST" ? 201 : 200);
+    }
+    if (req.method === "POST" && url.pathname.startsWith("/repos/acme/web/statuses/")) {
+      if (!mayPost) return send({ message: "Resource not accessible by personal access token" }, 403);
+      statuses.push({ path: url.pathname, body: JSON.parse(Buffer.concat(chunks).toString("utf8")) });
+      return send({}, 201);
+    }
+    res.writeHead(404).end("{}");
+  });
+  let pr: Awaited<ReturnType<typeof startApp>>;
+  beforeAll(async () => {
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    pr = await startApp({
+      version,
+      forgeOptions: { githubApi: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, publicUrl: "https://sast.example.com" },
+    });
+  });
+  afterAll(async () => {
+    await pr.close();
+    await new Promise((r) => server.close(r));
+  });
+
+  it("scans an open pull request into the default branch, compares it, and posts the result as a commit status", async () => {
+    await pr.admin("/api/v1/connections", { method: "POST", body: JSON.stringify({ account: "acme", token: TOKEN }) });
+    await pr.forge.poll();
+    const jobs = (await json(await pr.admin("/api/v1/jobs"))).jobs as Array<Record<string, any>>;
+    // The default branch, and pull request 7; 8 goes into another branch.
+    expect(jobs.map((j) => `${j.branch} ${j.pullRequest}`).sort()).toEqual(["feature/login 7", "main null"]);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(statuses).toEqual([{ path: `/repos/acme/web/statuses/${head}`, body: expect.objectContaining({ state: "pending", context: "OpenAsy SAST" }) }]);
+
+    const made = await json(await pr.admin("/api/v1/agents", { method: "POST", body: JSON.stringify({ name: "dc1" }) }));
+    const { secret } = await json(await fetch(pr.base + "/api/v1/agent/enroll", { method: "POST", body: JSON.stringify({ token: made.enrollToken }) }));
+    const agent = (path: string, body: string) => fetch(pr.base + path, { method: "POST", headers: { authorization: `Bearer ${secret}` }, body });
+    const take = async () => (await json(await agent("/api/v1/agent/work", "{}"))).jobs[0];
+    // The baseline first, then the pull request, which adds one high finding.
+    const first = await take();
+    await agent(`/api/v1/agent/jobs/${first.id}/sarif`, sarif({ rule: "js.eval", level: "error", path: "src/a.js", line: 3 }));
+    const second = await take();
+    expect(second).toMatchObject({ branch: "feature/login", commit: head });
+    await agent(
+      `/api/v1/agent/jobs/${second.id}/sarif`,
+      sarif({ rule: "js.eval", level: "error", path: "src/a.js", line: 3 }, { rule: "js.sql", level: "error", path: "src/db.js", line: 9 }),
+    );
+    expect(statuses.at(-1)).toEqual({
+      path: `/repos/acme/web/statuses/${head}`,
+      body: {
+        state: "failure",
+        context: "OpenAsy SAST",
+        description: "1 new finding blocks this pull request.",
+        target_url: expect.stringMatching(/^https:\/\/sast\.example\.com\/scans\//),
+      },
+    });
+    // One comment lists what the pull request adds.
+    expect(comments).toEqual([
+      { method: "POST", path: "/repos/acme/web/issues/7/comments", body: expect.stringContaining("adds 1 finding, 1 of them blocking") },
+    ]);
+    expect(comments[0]!.body).toContain("| high | `js.sql` | `src/db.js:9` |");
+    expect(comments[0]!.body).toMatch(/\[See the scan\]\(https:\/\/sast\.example\.com\/scans\//);
+    // The default branch's scanned commit is not the pull request's.
+    const repo = (await json(await pr.admin("/api/v1/repositories"))).repositories[0];
+    expect(repo.scannedCommit).toBe("a".repeat(40));
+    secretOf = secret;
+  });
+
+  let secretOf = "";
+  it("edits its one comment when a later commit adds nothing", async () => {
+    prHead = "d".repeat(40);
+    await pr.forge.poll();
+    const agent = (path: string, body: string) => fetch(pr.base + path, { method: "POST", headers: { authorization: `Bearer ${secretOf}` }, body });
+    const job = (await json(await agent("/api/v1/agent/work", "{}"))).jobs[0];
+    expect(job).toMatchObject({ commit: prHead });
+    await agent(`/api/v1/agent/jobs/${job.id}/sarif`, sarif({ rule: "js.eval", level: "error", path: "src/a.js", line: 3 }));
+    expect(comments.at(-1)).toEqual({
+      method: "PATCH",
+      path: "/repos/acme/web/issues/comments/99",
+      body: expect.stringContaining("the latest commit adds no findings"),
+    });
+    expect(statuses.at(-1)!.body).toMatchObject({ state: "success", description: "Nothing new." });
+  });
+
+  it("keeps scanning when the token may not post statuses, and says why on the job", async () => {
+    mayPost = false;
+    pr.db.prepare("DELETE FROM scan_jobs WHERE pull_request = '7'").run();
+    await pr.forge.poll();
+    await new Promise((r) => setTimeout(r, 50));
+    const job = ((await json(await pr.admin("/api/v1/jobs"))).jobs as Array<Record<string, any>>).find((j) => j.pullRequest === "7");
+    expect(job).toMatchObject({ status: "queued", checkError: expect.stringMatching(/Commit statuses, read and write/) });
   });
 });

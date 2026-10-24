@@ -23,7 +23,9 @@
     "n30Days": "30 days",
     "n90Days": "90 days",
     "n180Days": "180 days",
-    "n1Year": "1 year"
+    "n1Year": "1 year",
+    "switchRuleOff": "Switch rule off",
+    "ruleOff": "Rule switched off"
   },
   "findingsTable": {
     "severity": "Severity",
@@ -166,7 +168,8 @@
     "signIn": "Sign-in",
     "apiTokens": "API tokens",
     "account": "Account",
-    "github": "GitHub"
+    "github": "GitHub",
+    "rules": "Rules"
   },
   "failOn": {
     "critical": "Critical",
@@ -183,7 +186,7 @@
   },
   "githubPage": {
     "title": "GitHub",
-    "description": "sast follows the repositories of the GitHub accounts here, not archived ones, and an agent scans each default branch when it moves. Code stays with the agent; sast keeps only findings.",
+    "description": "sast follows the repositories of the GitHub accounts here, not archived ones. An agent scans each default branch when it moves, and each open pull request into it, whose result goes back to GitHub as the commit status OpenAsy SAST and one comment listing what it adds. Code stays with the agent; sast keeps only findings.",
     "lookNow": "Look now",
     "connectAccount": "Connect account",
     "noAgentOnline": "No agent is online",
@@ -235,7 +238,7 @@
     },
     "noJobs": "No scan jobs yet",
     "noJobsDetail": "Each default branch is queued once its account is connected.",
-    "connectDescription": "The token is checked with GitHub, kept sealed, and never shown again. A fine-grained token with read access to Contents and Metadata of the account's repositories is enough.",
+    "connectDescription": "The token is checked with GitHub, kept sealed, and never shown again. A fine-grained token with read access to Contents and Metadata of the account's repositories, and read and write access to Pull requests and Commit statuses, is enough.",
     "accountHint": "The organization or user, such as acme.",
     "token": "Token",
     "tokenHint": "github_pat_...",
@@ -244,5 +247,29 @@
     "startAgent": "Start {{name}}",
     "startAgentDescription": "Run this where the agent can reach sast and GitHub. The token works once, for 7 days, and is not shown again.",
     "done": "Done"
+  },
+  "rulesPage": {
+    "title": "Rules",
+    "description": "sast-agent scans with OpenAsy's own rules, the rule sources under GitHub, and the rule files here. A rule switched off reports nothing in agent scans, whichever file it comes from. Scans CI sends use CI's own rules.",
+    "add": "Add rule file",
+    "own": "Your rule files",
+    "ownDescription": "In Opengrep's format. A file Opengrep cannot read fails the next scan, and the scan job says why.",
+    "name": "Name",
+    "rules": "Rules in it",
+    "actions": "Actions",
+    "remove": "Remove {{name}}",
+    "noOwn": "No rule files of your own",
+    "noOwnDetail": "Write rules for what your code must not do, such as a call your team has banned.",
+    "disabled": "Switched off",
+    "disabledDescription": "Rule ids, as findings show them. A finding of a rule switched off is marked fixed at the next scan of the default branch.",
+    "noneDisabled": "Every rule runs.",
+    "enable": "Switch {{id}} on again",
+    "ruleId": "Rule id",
+    "switchOff": "Switch off",
+    "editDescription": "An Opengrep rule file of up to 256 KiB; several rules can share one file. It is used from the next scan on.",
+    "nameHint": "Lowercase letters, digits, dots, dashes and underscores.",
+    "yaml": "Rules",
+    "cancel": "Cancel",
+    "save": "Save"
   }
 }

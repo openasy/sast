@@ -259,6 +259,25 @@ describe("responses match openapi.json", () => {
     await call("DELETE", "/api/v1/connections/{id}", admin(), `/api/v1/connections/${connection.id}`);
     await call("DELETE", "/api/v1/connections/{id}", admin(), "/api/v1/connections/missing");
   });
+  it("own rules and switched off rules", async () => {
+    const yaml =
+      "rules:\n  - id: acme.no-console\n    pattern: console.log(...)\n    message: No console.log\n    languages: [javascript]\n    severity: WARNING\n";
+    const made = (await call("POST", "/api/v1/rules", admin({ name: "no-console", yaml }))).body as { id: string };
+    await call("POST", "/api/v1/rules", admin({ name: "no-console", yaml }));
+    await call("POST", "/api/v1/rules", admin({ name: "Bad Name", yaml }));
+    await call("POST", "/api/v1/rules", admin({ name: "big", yaml: `rules:\n${"#".repeat(270 * 1024)}` }));
+    await call("POST", "/api/v1/rules", {});
+    await call("GET", "/api/v1/rules", admin());
+    await call("GET", "/api/v1/rules", {});
+    await call("PUT", "/api/v1/rules/{id}", admin({ yaml: yaml.replace("No console.log", "No console") }), `/api/v1/rules/${made.id}`);
+    await call("PUT", "/api/v1/rules/{id}", admin({ yaml: "nope" }), `/api/v1/rules/${made.id}`);
+    await call("PUT", "/api/v1/rules/{id}", admin({ yaml }), "/api/v1/rules/missing");
+    await call("PUT", "/api/v1/rules/disabled", admin({ disabled: ["openasy.javascript.eval"] }));
+    await call("PUT", "/api/v1/rules/disabled", admin({ disabled: ["; rm"] }));
+    await call("PUT", "/api/v1/rules/disabled", {});
+    await call("DELETE", "/api/v1/rules/{id}", admin(), `/api/v1/rules/${made.id}`);
+    await call("DELETE", "/api/v1/rules/{id}", admin(), `/api/v1/rules/${made.id}`);
+  });
 
   it("covers every operation in openapi.json", () => {
     const all = Object.entries(spec.paths).flatMap(([path, ops]) => Object.keys(ops).map((m) => `${m.toUpperCase()} ${path}`));

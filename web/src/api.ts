@@ -34,6 +34,21 @@ export interface Repository {
   scannedCommit: string | null;
 }
 
+/** A rule file the install wrote, in Opengrep's format. */
+export interface OwnRule {
+  id: string;
+  name: string;
+  yaml: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RuleList {
+  own: OwnRule[];
+  /** Rule ids no scan reports. */
+  disabled: string[];
+}
+
 /** A GitHub account whose repositories sast follows (ADR 0036). The token is never sent back. */
 export interface Connection {
   id: string;
@@ -64,6 +79,10 @@ export interface Job {
   attempts: number;
   error: string | null;
   scanId: string | null;
+  /** The pull request scanned, by number; null for the default branch. */
+  pullRequest: string | null;
+  /** Why the result could not be posted to the pull request. */
+  checkError: string | null;
   createdAt: string;
   finishedAt: string | null;
 }

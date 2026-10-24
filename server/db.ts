@@ -113,6 +113,26 @@ const MIGRATIONS = [
      finished_at TEXT
    );
    CREATE INDEX scan_jobs_queue ON scan_jobs (status, created_at)`,
+  // Pull requests of a connected repository are scanned too, and the result goes back to GitHub as a commit status
+  // (ADR 0036). check_error says why a status could not be posted, such as a token without that permission.
+  `ALTER TABLE scan_jobs ADD COLUMN pull_request TEXT;
+   ALTER TABLE scan_jobs ADD COLUMN check_error TEXT;
+   -- The one comment sast keeps on a pull request, edited at each scan rather than added again.
+   CREATE TABLE pr_comments (
+     repo_id TEXT NOT NULL REFERENCES repositories (id) ON DELETE CASCADE,
+     pull_request TEXT NOT NULL,
+     comment_id TEXT NOT NULL,
+     PRIMARY KEY (repo_id, pull_request)
+   );`,
+  // Rules an install writes itself, in Opengrep's format, sent to the agent with each job (ADR 0036). Which rules
+  // are switched off is kept in settings as disabled_rules.
+  `CREATE TABLE own_rules (
+     id TEXT PRIMARY KEY,
+     name TEXT NOT NULL UNIQUE,
+     yaml TEXT NOT NULL,
+     created_at TEXT NOT NULL,
+     updated_at TEXT NOT NULL
+   );`,
 ];
 
 /** Opens the product's single SQLite file in WAL mode (ADR 0011) and migrates it forward. */

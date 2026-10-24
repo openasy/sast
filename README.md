@@ -34,12 +34,19 @@ and GitLab come next (ADR 0036).
 ## Repositories from GitHub
 
 Under GitHub, an owner connects an organization or user with a token. A fine-grained token with read access to
-**Contents** and **Metadata** of the account's repositories is enough; sast checks it with GitHub, keeps it sealed with
-`openasy-kek` and never shows it again.
+**Contents** and **Metadata** of the account's repositories, and read and write access to **Pull requests** and
+**Commit statuses**, is enough; sast checks it with GitHub, keeps it sealed with `openasy-kek` and never shows it again.
 
 - sast lists the account's repositories every few minutes (`SAST_POLL_MINUTES`), leaves archived ones and other
   owners' out, and queues a scan of a default branch whenever its latest commit is not scanned yet. A quiet account
   costs one GitHub call per 100 repositories.
+- Each open pull request into the default branch is scanned at its latest commit, after the default branch, and
+  compared with it. Its result goes back to the pull request as the commit status **OpenAsy SAST**: pending while it
+  waits, then success or failure with the number of new and blocking findings and a link to the scan. Make it a
+  required status check in the branch's protection rules to block merging. One comment on the pull request lists the
+  findings it adds, up to 10 with a link to the rest, and is edited at each later scan rather than added again. A token that may not post statuses still
+  gets its pull requests scanned; the job says why the status is missing. Listing pull requests costs one GitHub call
+  per repository on each look.
 - A repository can be turned off on its own page; its queued scans are dropped. **Scan now** queues the latest commit
   again.
 - An admin adds agents under GitHub; each gets a one-time enrolment token and a command to start it. An agent asks for
@@ -47,6 +54,9 @@ Under GitHub, an owner connects an organization or user with a token. A fine-gra
   not finish within 30 minutes goes back to the queue, three times at most.
 - The agent ships OpenAsy's own Opengrep rules. Admins may add public rule repositories under GitHub, Rule sources;
   their content and licence are the install's responsibility.
+- Under Rules, admins write rule files of their own in Opengrep's format, sent to the agent with each job, and switch
+  rules off by id, whichever file they come from; a finding's panel can switch its rule off too. A rule file Opengrep
+  cannot read fails the next scan, and the job says why. Scans sent from CI use CI's own rules.
 - Removing a connection keeps its repositories, their findings and triage; they become CI repositories.
 
 ## Run

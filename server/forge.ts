@@ -19,6 +19,11 @@ const LEASE_MS = 30 * 60_000;
 const MAX_ATTEMPTS = 3;
 /** Rule sources an install adds of its own: git repositories of Opengrep rules, fetched by the agent at scan time. */
 const RULE_SOURCE = /^https:\/\/[A-Za-z0-9.-]+(?::\d+)?\/[A-Za-z0-9._~/-]+$/;
+const RULE_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+// A rule id as Opengrep prints it, such as openasy.javascript.eval.
+const RULE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
+const MAX_OWN_RULES = 100;
+const MAX_RULE_BYTES = 256 * 1024;
 
 export interface Connection {
   id: string;
@@ -49,6 +54,10 @@ export interface Job {
   attempts: number;
   error: string | null;
   scanId: string | null;
+  /** The pull request scanned, by number; null for the default branch. */
+  pullRequest: string | null;
+  /** Why the result could not be posted to the pull request. */
+  checkError: string | null;
   createdAt: string;
   finishedAt: string | null;
 }
@@ -63,20 +72,53 @@ export interface Work {
   /** For an HTTPS clone; never logged by the agent. */
   token: string;
   ruleSources: string[];
+  /** Rules the install wrote, each an Opengrep YAML file. */
+  ownRules: Array<{ name: string; yaml: string }>;
+  /** Rule ids switched off: Opengrep skips them, whichever file they come from. */
+  disabledRules: string[];
 }
 
 export interface ForgeOptions {
   db: DatabaseSync;
   /** Seals forge tokens (ADR 0021); without it no connection can be added. */
   keyring?: Keyring;
-  /** Takes a SARIF log for a repository, as POST /api/v1/scans does, and returns the scan's id. */
-  ingest: (params: { repository: string; branch: string; commit: string; defaultBranch: string }, raw: Buffer) => { id: string };
+  /** Takes a SARIF log for a repository, as POST /api/v1/scans does, and returns the scan with whether it passed. */
+  ingest: (
+    params: { repository: string; branch: string; commit: string; defaultBranch: string; pullRequest?: string | null },
+    raw: Buffer,
+  ) => { id: string; new: number; blocking: number; passed: boolean; findings: NewFinding[] };
+  /** Where people open sast, for the link in a pull request's check. */
+  publicUrl?: string;
   /** The GitHub API, https://api.github.com unless GitHub Enterprise Server. */
   githubApi?: string;
   /** For tests: the HTTP client. */
   fetch?: typeof fetch;
   log?: (level: "info" | "warn", msg: string, fields?: Record<string, unknown>) => void;
 }
+
+/** A finding a pull request adds, as the scan's answer lists them, most severe first. */
+export interface NewFinding {
+  rule: string;
+  severity: string;
+  path: string;
+  line: number | null;
+  message: string;
+}
+
+/** Findings listed in a pull request's comment; the scan's page has them all. */
+const COMMENT_FINDINGS = 10;
+const COMMENT_MARK = "<!-- openasy-sast -->";
+
+interface GithubPull {
+  number: number;
+  head: { sha: string; ref: string };
+  base: { ref: string };
+}
+
+/** The name of a commit status on GitHub: one per pull request commit, replaced as the scan moves on. */
+const CHECK_CONTEXT = "OpenAsy SAST";
+// A branch the agent will clone; a pull request from a branch with other characters is named after its number.
+const AGENT_BRANCH = /^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,255}$/;
 
 interface GithubRepo {
   full_name: string;
@@ -141,9 +183,22 @@ export function createForge(opts: ForgeOptions) {
 
   // ---- GitHub ---------------------------------------------------------------
 
-  async function github(token: string, path: string): Promise<{ ok: boolean; status: number; body: unknown; next?: string }> {
+  async function github(
+    token: string,
+    path: string,
+    post?: unknown,
+    method: "POST" | "PATCH" = "POST",
+  ): Promise<{ ok: boolean; status: number; body: unknown; next?: string }> {
     const res = await http(path.startsWith("http") ? path : `${githubApi}${path}`, {
-      headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28", "user-agent": "openasy-sast" },
+      method: post === undefined ? "GET" : method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: "application/vnd.github+json",
+        "x-github-api-version": "2022-11-28",
+        "user-agent": "openasy-sast",
+        ...(post !== undefined && { "content-type": "application/json" }),
+      },
+      ...(post !== undefined && { body: JSON.stringify(post) }),
       signal: AbortSignal.timeout(15_000),
     });
     const next = /<([^>]+)>;\s*rel="next"/.exec(res.headers.get("link") ?? "")?.[1];
@@ -189,7 +244,9 @@ export function createForge(opts: ForgeOptions) {
               row.id as string,
             );
           }
-          if (row.scan_enabled === 0 || (row.pushed_at === repo.pushed_at && row.head_commit)) continue;
+          if (row.scan_enabled === 0) continue;
+          await pullRequests(token, row.id as string, repo);
+          if (row.pushed_at === repo.pushed_at && row.head_commit) continue;
           const branch = await github(token, `/repos/${repo.full_name}/branches/${encodeURIComponent(repo.default_branch)}`);
           // An empty repository has no branch yet.
           if (!branch.ok) continue;
@@ -205,18 +262,75 @@ export function createForge(opts: ForgeOptions) {
     }
   }
 
-  /** One job per repository and commit: a commit already queued or scanned is not queued again. */
-  function queue(repoId: string, branch: string, commit: string) {
-    if (db.prepare("SELECT 1 FROM scan_jobs WHERE repo_id = ? AND commit_sha = ? AND status IN ('queued', 'running', 'done')").get(repoId, commit)) return;
-    // A newer commit makes the queued one moot.
-    db.prepare("DELETE FROM scan_jobs WHERE repo_id = ? AND status = 'queued'").run(repoId);
-    db.prepare("INSERT INTO scan_jobs (id, repo_id, branch, commit_sha, status, created_at) VALUES (?, ?, ?, ?, 'queued', ?)").run(
-      randomUUID(),
+  /**
+   * The open pull requests into the default branch, each scanned at its latest commit and compared with the default
+   * branch. A fork's pull request is fetched from the base repository, which GitHub serves it from. One call a look.
+   */
+  async function pullRequests(token: string, repoId: string, repo: GithubRepo) {
+    const r = await github(token, `/repos/${repo.full_name}/pulls?state=open&per_page=100`);
+    if (!r.ok) return;
+    for (const pr of r.body as GithubPull[]) {
+      if (pr.base.ref !== repo.default_branch) continue;
+      const branch = AGENT_BRANCH.test(pr.head.ref) ? pr.head.ref : `pull/${pr.number}`;
+      const jobId = queue(repoId, branch, pr.head.sha, String(pr.number));
+      if (jobId) void postStatus(repoId, pr.head.sha, "pending", "Waiting for sast-agent to scan this commit.", null, jobId);
+    }
+  }
+
+  /**
+   * One job per repository, commit and pull request: a commit already queued or scanned is not queued again, and a
+   * newer commit of the same branch or pull request makes the queued one moot. Returns the new job's id, if any.
+   */
+  function queue(repoId: string, branch: string, commit: string, pullRequest: string | null = null): string | null {
+    if (
+      db
+        .prepare("SELECT 1 FROM scan_jobs WHERE repo_id = ? AND commit_sha = ? AND pull_request IS ? AND status IN ('queued', 'running', 'done')")
+        .get(repoId, commit, pullRequest)
+    )
+      return null;
+    db.prepare("DELETE FROM scan_jobs WHERE repo_id = ? AND pull_request IS ? AND status = 'queued'").run(repoId, pullRequest);
+    const id = randomUUID();
+    db.prepare("INSERT INTO scan_jobs (id, repo_id, branch, commit_sha, pull_request, status, created_at) VALUES (?, ?, ?, ?, ?, 'queued', ?)").run(
+      id,
       repoId,
       branch,
       commit,
+      pullRequest,
       now(),
     );
+    return id;
+  }
+
+  /** Posts a commit status for a pull request's commit. A token that may not leaves the reason on the job, not a failure. */
+  async function postStatus(
+    repoId: string,
+    sha: string,
+    state: "pending" | "success" | "failure" | "error",
+    description: string,
+    scanId: string | null,
+    jobId?: string,
+  ) {
+    const r = db.prepare("SELECT r.name, c.token FROM repositories r JOIN forge_connections c ON c.id = r.connection_id WHERE r.id = ?").get(repoId) as
+      { name: string; token: string } | undefined;
+    if (!r || !opts.keyring) return;
+    let error: string | null = null;
+    try {
+      const res = await github(opts.keyring.open(r.token).toString("utf8"), `/repos/${r.name}/statuses/${sha}`, {
+        state,
+        context: CHECK_CONTEXT,
+        description: description.slice(0, 140),
+        ...(scanId && opts.publicUrl && { target_url: `${opts.publicUrl.replace(/\/$/, "")}/scans/${scanId}` }),
+      });
+      if (!res.ok)
+        error =
+          res.status === 403 || res.status === 404
+            ? "The token may not post commit statuses: give it Commit statuses, read and write."
+            : `GitHub answered ${res.status} to the commit status.`;
+    } catch (err) {
+      error = `The commit status could not be posted: ${(err as Error).message}`;
+    }
+    if (jobId) db.prepare("UPDATE scan_jobs SET check_error = ? WHERE id = ?").run(error, jobId);
+    if (error) opts.log?.("warn", "commit status not posted", { repository: r.name, error });
   }
 
   /** Scans a repository's default branch again at the next agent's turn, as Scan now does. */
@@ -247,9 +361,61 @@ export function createForge(opts: ForgeOptions) {
       attempts: j.attempts as number,
       error: j.error as string | null,
       scanId: j.scan_id as string | null,
+      pullRequest: (j.pull_request as string | null) ?? null,
+      checkError: (j.check_error as string | null) ?? null,
       createdAt: j.created_at as string,
       finishedAt: j.finished_at as string | null,
     }));
+  }
+
+  // ---- own rules and switched off rules -------------------------------------
+
+  const toRule = (r: Record<string, string>) => ({ id: r.id!, name: r.name!, yaml: r.yaml!, createdAt: r.created_at!, updatedAt: r.updated_at! });
+  const disabledRules = (): string[] => {
+    const v = (db.prepare("SELECT value FROM settings WHERE key = 'disabled_rules'").get() as { value: string } | undefined)?.value;
+    return v ? (JSON.parse(v) as string[]) : [];
+  };
+  const listRules = () => ({
+    own: (db.prepare("SELECT * FROM own_rules ORDER BY name").all() as Array<Record<string, string>>).map(toRule),
+    disabled: disabledRules(),
+  });
+  /** A rule file is checked for its shape here; Opengrep reads it at the next scan, and a broken one fails that scan. */
+  const ruleYaml = (v: unknown) => {
+    if (typeof v !== "string" || !v.trim() || Buffer.byteLength(v) > MAX_RULE_BYTES || !/^rules:/m.test(v))
+      throw bad("yaml is an Opengrep rule file of up to 256 KiB, starting with rules:.");
+    return v;
+  };
+
+  function createRule(body: { name?: unknown; yaml?: unknown }) {
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    if (!RULE_NAME.test(name)) throw bad("name is lowercase letters, digits, dots, dashes and underscores, such as no-console-log.");
+    const yaml = ruleYaml(body.yaml);
+    if ((db.prepare("SELECT COUNT(*) AS n FROM own_rules").get() as { n: number }).n >= MAX_OWN_RULES)
+      throw new SastError(409, "conflict", `An install has at most ${MAX_OWN_RULES} rule files; put several rules in one.`);
+    if (db.prepare("SELECT 1 FROM own_rules WHERE name = ?").get(name)) throw new SastError(409, "conflict", `A rule file named ${name} exists.`);
+    const id = randomUUID();
+    db.prepare("INSERT INTO own_rules (id, name, yaml, created_at, updated_at) VALUES (?, ?, ?, ?, ?)").run(id, name, yaml, now(), now());
+    return toRule(db.prepare("SELECT * FROM own_rules WHERE id = ?").get(id) as Record<string, string>);
+  }
+
+  function updateRule(id: string, body: { yaml?: unknown }) {
+    if (!db.prepare("SELECT 1 FROM own_rules WHERE id = ?").get(id)) throw notFound("The rule file");
+    db.prepare("UPDATE own_rules SET yaml = ?, updated_at = ? WHERE id = ?").run(ruleYaml(body.yaml), now(), id);
+    return toRule(db.prepare("SELECT * FROM own_rules WHERE id = ?").get(id) as Record<string, string>);
+  }
+
+  function deleteRule(id: string) {
+    if (db.prepare("DELETE FROM own_rules WHERE id = ?").run(id).changes === 0) throw notFound("The rule file");
+  }
+
+  /** Rule ids no scan reports any more: a noisy shipped rule, or one from a rule source. */
+  function setDisabledRules(list: unknown): string[] {
+    if (!Array.isArray(list) || list.length > 500 || list.some((s) => typeof s !== "string" || !RULE_ID.test(s)))
+      throw bad("disabled is a list of at most 500 rule ids, such as openasy.javascript.eval.");
+    db.prepare("INSERT INTO settings (key, value) VALUES ('disabled_rules', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").run(
+      JSON.stringify([...new Set(list as string[])].sort()),
+    );
+    return disabledRules();
   }
 
   // ---- rule sources -------------------------------------------------------
@@ -309,7 +475,7 @@ export function createForge(opts: ForgeOptions) {
     const token = typeof body.token === "string" ? body.token : "";
     const a = db.prepare("SELECT * FROM agents WHERE enroll_token_hash = ?").get(hash(token)) as Record<string, string> | undefined;
     if (!a || Date.parse(a.enroll_expires_at!) < Date.now())
-      throw new SastError(401, "invalid-token", "The enrolment token is unknown, used or expired. Make a new one under Settings, Agents.");
+      throw new SastError(401, "invalid-token", "The enrolment token is unknown, used or expired. Make a new one under GitHub, Agents.");
     const secret = `osa_${randomBytes(32).toString("base64url")}`;
     db.prepare("UPDATE agents SET enroll_token_hash = NULL, enroll_expires_at = NULL, secret_hash = ?, version = ?, last_seen = ? WHERE id = ?").run(
       hash(secret),
@@ -329,7 +495,10 @@ export function createForge(opts: ForgeOptions) {
     return row && timingSafeEqual(Buffer.from(row.secret_hash), want) ? row.id : undefined;
   }
 
-  /** The next job for an agent, leased to it; a lease that ran out goes back to the queue, three times at most. */
+  /**
+   * The next job for an agent, leased to it; a lease that ran out goes back to the queue, three times at most. Default
+   * branches go first, so a pull request is compared with a baseline that is there.
+   */
   function work(agentId: string, version?: unknown): { jobs: Work[] } {
     db.prepare("UPDATE agents SET last_seen = ?, version = COALESCE(?, version) WHERE id = ?").run(
       now(),
@@ -346,7 +515,7 @@ export function createForge(opts: ForgeOptions) {
       .prepare(
         `SELECT j.*, r.name, r.clone_url, c.token FROM scan_jobs j JOIN repositories r ON r.id = j.repo_id
          JOIN forge_connections c ON c.id = r.connection_id
-         WHERE j.status = 'queued' AND r.scan_enabled = 1 ORDER BY j.created_at LIMIT 1`,
+         WHERE j.status = 'queued' AND r.scan_enabled = 1 ORDER BY j.pull_request IS NOT NULL, j.created_at LIMIT 1`,
       )
       .get() as Record<string, string> | undefined;
     if (!job || !opts.keyring) return { jobs: [] };
@@ -365,6 +534,11 @@ export function createForge(opts: ForgeOptions) {
           commit: job.commit_sha!,
           token: opts.keyring.open(job.token!).toString("utf8"),
           ruleSources: ruleSources(),
+          ownRules: (db.prepare("SELECT name, yaml FROM own_rules ORDER BY name").all() as Array<{ name: string; yaml: string }>).map((r) => ({
+            name: r.name,
+            yaml: r.yaml,
+          })),
+          disabledRules: disabledRules(),
         },
       ],
     };
@@ -377,20 +551,93 @@ export function createForge(opts: ForgeOptions) {
     return j;
   };
 
-  /** The SARIF of a finished job, compared and kept as any scan of the default branch is. */
-  function complete(agentId: string, jobId: string, sarif: Buffer) {
+  /** Text from a finding, safe inside a table cell's code span. */
+  const cell = (s: string) => s.replace(/[`|\r\n]/g, " ").slice(0, 120);
+
+  /**
+   * The pull request's one comment from sast, with the findings the latest commit adds: written when there are some,
+   * and edited at each later scan, also to say there are none any more. A token that may not leaves the reason on the job.
+   */
+  async function postComment(repoId: string, pullRequest: string, scan: { id: string; new: number; blocking: number; findings: NewFinding[] }, jobId: string) {
+    const r = db.prepare("SELECT r.name, c.token FROM repositories r JOIN forge_connections c ON c.id = r.connection_id WHERE r.id = ?").get(repoId) as
+      { name: string; token: string } | undefined;
+    if (!r || !opts.keyring) return;
+    const existing = (
+      db.prepare("SELECT comment_id FROM pr_comments WHERE repo_id = ? AND pull_request = ?").get(repoId, pullRequest) as { comment_id: string } | undefined
+    )?.comment_id;
+    if (!scan.new && !existing) return;
+    const link = opts.publicUrl ? `${opts.publicUrl.replace(/\/$/, "")}/scans/${scan.id}` : null;
+    const shown = scan.findings.slice(0, COMMENT_FINDINGS);
+    const body = [
+      COMMENT_MARK,
+      scan.new
+        ? `**OpenAsy SAST**: this pull request adds ${scan.new} ${scan.new === 1 ? "finding" : "findings"}${scan.blocking ? `, ${scan.blocking} of them blocking` : ", none blocking"}.`
+        : "**OpenAsy SAST**: the latest commit adds no findings.",
+      ...(shown.length
+        ? [
+            "",
+            "| Severity | Rule | Where |",
+            "| --- | --- | --- |",
+            ...shown.map((f) => `| ${f.severity} | \`${cell(f.rule)}\` | \`${cell(f.path)}${f.line ? `:${f.line}` : ""}\` |`),
+          ]
+        : []),
+      ...(scan.new > shown.length ? ["", `And ${scan.new - shown.length} more.`] : []),
+      ...(link ? ["", `[See the scan](${link})`] : []),
+    ].join("\n");
+    const token = opts.keyring.open(r.token).toString("utf8");
+    let error: string | null = null;
+    try {
+      let res = existing ? await github(token, `/repos/${r.name}/issues/comments/${existing}`, { body }, "PATCH") : undefined;
+      // A comment someone deleted is written again.
+      if (!res || res.status === 404) {
+        res = await github(token, `/repos/${r.name}/issues/${pullRequest}/comments`, { body });
+        if (res.ok)
+          db.prepare(
+            "INSERT INTO pr_comments (repo_id, pull_request, comment_id) VALUES (?, ?, ?) ON CONFLICT (repo_id, pull_request) DO UPDATE SET comment_id = excluded.comment_id",
+          ).run(repoId, pullRequest, String((res.body as { id: number }).id));
+      }
+      if (!res.ok)
+        error =
+          res.status === 403
+            ? "The token may not comment on pull requests: give it Pull requests, read and write."
+            : `GitHub answered ${res.status} to the comment.`;
+    } catch (err) {
+      error = `The comment could not be posted: ${(err as Error).message}`;
+    }
+    if (error) {
+      const before = (db.prepare("SELECT check_error FROM scan_jobs WHERE id = ?").get(jobId) as { check_error: string | null }).check_error;
+      db.prepare("UPDATE scan_jobs SET check_error = ? WHERE id = ?").run(before ? `${before} ${error}` : error, jobId);
+      opts.log?.("warn", "pull request comment not posted", { repository: r.name, error });
+    }
+  }
+
+  /**
+   * The SARIF of a finished job, compared and kept as any scan is: a default branch scan is the baseline, a pull
+   * request's is compared with it, and its result goes back to the pull request as a commit status.
+   */
+  async function complete(agentId: string, jobId: string, sarif: Buffer) {
     const j = ownJob(agentId, jobId);
-    const scan = opts.ingest({ repository: j.name!, branch: j.branch!, commit: j.commit_sha!, defaultBranch: j.default_branch! }, sarif);
+    const scan = opts.ingest(
+      { repository: j.name!, branch: j.branch!, commit: j.commit_sha!, defaultBranch: j.default_branch!, pullRequest: j.pull_request ?? null },
+      sarif,
+    );
     db.prepare("UPDATE scan_jobs SET status = 'done', scan_id = ?, finished_at = ?, lease_until = NULL WHERE id = ?").run(scan.id, now(), jobId);
-    db.prepare("UPDATE repositories SET scanned_commit = ? WHERE id = ?").run(j.commit_sha!, j.repo_id!);
+    if (j.pull_request) {
+      const description = scan.passed
+        ? `${scan.new ? `${scan.new} new, none blocking` : "Nothing new"}.`
+        : `${scan.blocking} new ${scan.blocking === 1 ? "finding blocks" : "findings block"} this pull request.`;
+      await postStatus(j.repo_id!, j.commit_sha!, scan.passed ? "success" : "failure", description, scan.id, jobId);
+      await postComment(j.repo_id!, j.pull_request, scan, jobId);
+    } else db.prepare("UPDATE repositories SET scanned_commit = ? WHERE id = ?").run(j.commit_sha!, j.repo_id!);
     return { scanId: scan.id };
   }
 
-  function fail(agentId: string, jobId: string, body: { error?: unknown }) {
-    ownJob(agentId, jobId);
+  async function fail(agentId: string, jobId: string, body: { error?: unknown }) {
+    const j = ownJob(agentId, jobId);
     const error = typeof body.error === "string" ? body.error.slice(0, 1000) : "The agent could not scan it.";
     db.prepare("UPDATE scan_jobs SET status = 'failed', error = ?, finished_at = ?, lease_until = NULL WHERE id = ?").run(error, now(), jobId);
     opts.log?.("warn", "scan job failed", { job: jobId, error });
+    if (j.pull_request) await postStatus(j.repo_id!, j.commit_sha!, "error", `The scan failed: ${error}`, null, jobId);
   }
 
   return {
@@ -402,6 +649,11 @@ export function createForge(opts: ForgeOptions) {
     listJobs,
     ruleSources,
     setRuleSources,
+    listRules,
+    createRule,
+    updateRule,
+    deleteRule,
+    setDisabledRules,
     listAgents,
     createAgent,
     deleteAgent,
