@@ -1,12 +1,13 @@
 import react from "@vitejs/plugin-react";
 import { readFileSync } from "node:fs";
+import { colophon } from "@openasy/ui/vite";
 import { defineConfig } from "vite";
 
 const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
 
 export default defineConfig({
   root: import.meta.dirname,
-  plugins: [react()],
+  plugins: [react(), colophon()],
   // sast-agent runs the same version as sast (ADR 0019): the command to start one names it.
   define: { __APP_VERSION__: JSON.stringify(version) },
   build: { outDir: "../dist/web", emptyOutDir: true },
