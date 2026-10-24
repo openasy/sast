@@ -3,7 +3,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { parseSarif, SarifError, SEVERITIES, type Finding, type Severity } from "./sarif.ts";
 
 export type ProblemCode =
-  "invalid-token" | "invalid-json" | "invalid-body" | "invalid-sarif" | "not-found" | "not-configured" | "payload-too-large" | "internal-error";
+  "invalid-token" | "invalid-json" | "invalid-body" | "invalid-sarif" | "not-found" | "conflict" | "not-configured" | "payload-too-large" | "internal-error";
 
 export class SastError extends Error {
   readonly status: number;
@@ -128,6 +128,11 @@ export function createSast(db: DatabaseSync, { retentionDays = 365 }: SastOption
       name: r.name as string,
       defaultBranch: r.default_branch as string,
       failOn: r.fail_on as FailOn,
+      // From a forge connection, scanned by sast-agent, or sent from CI (ADR 0036).
+      source: (r.connection_id ? "github" : "ci") as "github" | "ci",
+      scanEnabled: r.scan_enabled !== 0,
+      headCommit: (r.head_commit ?? null) as string | null,
+      scannedCommit: (r.scanned_commit ?? null) as string | null,
       open: openCounts(r.id),
       suppressed,
       lastScan: last
@@ -357,8 +362,14 @@ export function createSast(db: DatabaseSync, { retentionDays = 365 }: SastOption
 
     updateRepository(id: string, body: Record<string, unknown>) {
       repoRow(id);
-      const { defaultBranch, failOn, ...rest } = body;
-      if (Object.keys(rest).length || (defaultBranch === undefined && failOn === undefined)) throw bad("Expected { defaultBranch?, failOn? }.");
+      const { defaultBranch, failOn, scanEnabled, ...rest } = body;
+      if (Object.keys(rest).length || (defaultBranch === undefined && failOn === undefined && scanEnabled === undefined))
+        throw bad("Expected { defaultBranch?, failOn?, scanEnabled? }.");
+      if (scanEnabled !== undefined) {
+        if (typeof scanEnabled !== "boolean") throw bad("scanEnabled must be true or false.");
+        db.prepare("UPDATE repositories SET scan_enabled = ? WHERE id = ?").run(scanEnabled ? 1 : 0, id);
+        if (!scanEnabled) db.prepare("DELETE FROM scan_jobs WHERE repo_id = ? AND status = 'queued'").run(id);
+      }
       if (defaultBranch !== undefined) {
         if (typeof defaultBranch !== "string" || !BRANCH.test(defaultBranch)) throw bad("defaultBranch must be a branch name.");
         db.prepare("UPDATE repositories SET default_branch = ? WHERE id = ?").run(defaultBranch, id);

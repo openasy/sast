@@ -4,6 +4,8 @@ import { createAuth } from "@openasy/auth";
 import type { AddressInfo } from "node:net";
 import { createApp, type AppOptions } from "./app.ts";
 import { openDb } from "./db.ts";
+import { createForge, type ForgeOptions } from "./forge.ts";
+import { createKeyring } from "./kek.ts";
 import { createSast } from "./sast.ts";
 
 export const INGEST_TOKEN = "test-ingest-token";
@@ -43,16 +45,19 @@ export function sarif(...results: TestResult[]) {
   });
 }
 
-export async function startApp(opts: Partial<AppOptions> & { version: string }) {
+export const KEK = Buffer.alloc(32, 9);
+
+export async function startApp(opts: Partial<AppOptions> & { version: string; forgeOptions?: Partial<ForgeOptions> }) {
   const db = openDb(":memory:");
   const sast = createSast(db);
+  const forge = createForge({ db, keyring: createKeyring(KEK), ingest: (p, raw) => sast.ingest(p, raw), ...opts.forgeOptions });
   // The origin is known once the port is, so the handler is set after listening.
   let handler: RequestListener = (_req, res) => res.writeHead(503).end();
   const server: Server = createServer((req, res) => handler(req, res));
   await new Promise<void>((resolve) => server.listen(0, resolve));
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const auth = createAuth({ db, product: "sast", productName: "OpenAsy SAST", origin: base });
-  handler = createApp({ db, sast, auth, ingestToken: INGEST_TOKEN, adminToken: ADMIN_TOKEN, ...opts });
+  handler = createApp({ db, sast, forge, auth, ingestToken: INGEST_TOKEN, adminToken: ADMIN_TOKEN, ...opts });
   const as =
     (token: string) =>
     (path: string, init: RequestInit = {}) =>
@@ -62,5 +67,5 @@ export async function startApp(opts: Partial<AppOptions> & { version: string }) 
   /** Sends a scan the way CI does. */
   const scan = (query: Record<string, string>, body: string) => ingest(`/api/v1/scans?${new URLSearchParams(query)}`, { method: "POST", body });
   const close = () => new Promise<void>((resolve) => server.close(() => resolve()));
-  return { db, sast, auth, base, admin, ingest, scan, close };
+  return { db, sast, forge, auth, base, admin, ingest, scan, close };
 }

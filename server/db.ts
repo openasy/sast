@@ -67,6 +67,52 @@ const MIGRATIONS = [
      suppressed INTEGER NOT NULL,
      PRIMARY KEY (scan_id, fingerprint)
    )`,
+  // Repositories from a forge, scanned by sast-agent (ADR 0036). A connection reads one account's repositories with a
+  // token sealed by openasy-kek; a repository from it is scanned when its default branch moves. sast holds no code.
+  `CREATE TABLE forge_connections (
+     id TEXT PRIMARY KEY,
+     kind TEXT NOT NULL CHECK (kind IN ('github')),
+     account TEXT NOT NULL,
+     api_url TEXT NOT NULL,
+     token TEXT NOT NULL,
+     created_at TEXT NOT NULL,
+     synced_at TEXT,
+     error TEXT,
+     UNIQUE (kind, api_url, account)
+   );
+   ALTER TABLE repositories ADD COLUMN connection_id TEXT REFERENCES forge_connections (id) ON DELETE SET NULL;
+   ALTER TABLE repositories ADD COLUMN clone_url TEXT;
+   ALTER TABLE repositories ADD COLUMN scan_enabled INTEGER NOT NULL DEFAULT 1;
+   ALTER TABLE repositories ADD COLUMN pushed_at TEXT;
+   ALTER TABLE repositories ADD COLUMN head_commit TEXT;
+   ALTER TABLE repositories ADD COLUMN scanned_commit TEXT;
+   CREATE TABLE agents (
+     id TEXT PRIMARY KEY,
+     name TEXT NOT NULL UNIQUE,
+     enroll_token_hash TEXT UNIQUE,
+     enroll_expires_at TEXT,
+     secret_hash TEXT UNIQUE,
+     version TEXT,
+     last_seen TEXT,
+     created_at TEXT NOT NULL
+   );
+   -- One scan of one commit of a repository. A job an agent took and did not finish goes back to the queue when its
+   -- lease runs out, three times at most.
+   CREATE TABLE scan_jobs (
+     id TEXT PRIMARY KEY,
+     repo_id TEXT NOT NULL REFERENCES repositories (id) ON DELETE CASCADE,
+     branch TEXT NOT NULL,
+     commit_sha TEXT NOT NULL,
+     status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'done', 'failed')),
+     agent_id TEXT REFERENCES agents (id) ON DELETE SET NULL,
+     lease_until TEXT,
+     attempts INTEGER NOT NULL DEFAULT 0,
+     error TEXT,
+     scan_id TEXT,
+     created_at TEXT NOT NULL,
+     finished_at TEXT
+   );
+   CREATE INDEX scan_jobs_queue ON scan_jobs (status, created_at)`,
 ];
 
 /** Opens the product's single SQLite file in WAL mode (ADR 0011) and migrates it forward. */

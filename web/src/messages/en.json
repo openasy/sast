@@ -72,7 +72,12 @@
     "aRepositoryAppearsWithIts": "A repository appears with its first scan. Its default branch is the baseline; other branches are compared with it.",
     "noRepositoriesYet": "No repositories yet",
     "sendAScanFromCi": "Send a scan from CI. See",
-    "setup": "Setup"
+    "setup": "Setup",
+    "source": "Source",
+    "github": "GitHub",
+    "githubOff": "GitHub, off",
+    "ci": "CI",
+    "connectGithubOrCi": "Connect a GitHub account, or send a scan from CI. See"
   },
   "repositoryPage": {
     "repositoryNotFound": "Repository not found",
@@ -101,7 +106,15 @@
     "delete2": "Delete",
     "scans": "Scans",
     "noScans": "No scans",
-    "nothingHasBeenSentFor": "Nothing has been sent for this repository."
+    "nothingHasBeenSentFor": "Nothing has been sent for this repository.",
+    "scanning": "Scanning",
+    "scanningDescription": "This repository comes from GitHub. An agent scans its default branch each time it moves.",
+    "scanThisRepository": "Scan this repository",
+    "headScanned": "The latest commit, {{commit}}, is scanned.",
+    "headNotScanned": "The latest commit, {{commit}}, is not scanned yet.",
+    "notScannedYet": "Not scanned yet.",
+    "scanNow": "Scan now",
+    "queued": "Queued"
   },
   "scanPage": {
     "scanNotFound": "Scan not found",
@@ -152,7 +165,8 @@
     "members": "Members",
     "signIn": "Sign-in",
     "apiTokens": "API tokens",
-    "account": "Account"
+    "account": "Account",
+    "github": "GitHub"
   },
   "failOn": {
     "critical": "Critical",
@@ -166,5 +180,69 @@
     "repository_other": "{{count}} repositories",
     "openFinding_one": "{{count}} open finding",
     "openFinding_other": "{{count}} open findings"
+  },
+  "githubPage": {
+    "title": "GitHub",
+    "description": "sast follows the repositories of the GitHub accounts here, not archived ones, and an agent scans each default branch when it moves. Code stays with the agent; sast keeps only findings.",
+    "lookNow": "Look now",
+    "connectAccount": "Connect account",
+    "noAgentOnline": "No agent is online",
+    "noAgentOnlineDetail": "Scans wait in the queue until an agent asks for them. Add one below and start it with its command.",
+    "accounts": "Accounts",
+    "accountsDescription": "Looked at every few minutes. A repository can be turned off on its own page.",
+    "account": "Account",
+    "repositories": "Repositories",
+    "lastLook": "Last look",
+    "notYet": "Not yet",
+    "actions": "Actions",
+    "disconnect": "Disconnect {{account}}",
+    "noAccounts": "No accounts connected",
+    "noAccountsDetail": "Connect a GitHub organization or user with a token that reads its code.",
+    "agents": "Agents",
+    "agentsDescription": "sast-agent clones and scans the code, where it can reach GitHub. It connects to sast; sast never connects to it.",
+    "name": "Name",
+    "status": "Status",
+    "version": "Version",
+    "lastSeen": "Last seen",
+    "agent": {
+      "waiting-to-enrol": "Waiting to enrol",
+      "online": "Online",
+      "offline": "Offline"
+    },
+    "removeAgent": "Remove agent {{name}}",
+    "noAgents": "No agents yet",
+    "noAgentsDetail": "Add one to scan repositories from GitHub.",
+    "agentName": "Agent name",
+    "agentNameHint": "Lowercase letters, digits, dots and dashes, such as dc1.",
+    "addAgent": "Add agent",
+    "ruleSources": "Rule sources",
+    "ruleSourcesDescription": "Public git repositories of Opengrep rules, fetched by the agent for each scan, next to the rules OpenAsy ships. A source and its licence are this install's choice.",
+    "onlyShippedRules": "Only the rules OpenAsy ships.",
+    "removeSource": "Remove {{url}}",
+    "ruleSourceUrl": "Rule source",
+    "ruleSourceHint": "An https git URL. At most 10.",
+    "addSource": "Add source",
+    "scanJobs": "Scan jobs",
+    "scanJobsDescription": "The latest 200, newest first. A job an agent does not finish goes back to the queue, three times at most.",
+    "repository": "Repository",
+    "commit": "Commit",
+    "queued": "Queued",
+    "job": {
+      "queued": "Queued",
+      "running": "Running",
+      "done": "Done",
+      "failed": "Failed"
+    },
+    "noJobs": "No scan jobs yet",
+    "noJobsDetail": "Each default branch is queued once its account is connected.",
+    "connectDescription": "The token is checked with GitHub, kept sealed, and never shown again. A fine-grained token with read access to Contents and Metadata of the account's repositories is enough.",
+    "accountHint": "The organization or user, such as acme.",
+    "token": "Token",
+    "tokenHint": "github_pat_...",
+    "cancel": "Cancel",
+    "connect": "Connect",
+    "startAgent": "Start {{name}}",
+    "startAgentDescription": "Run this where the agent can reach sast and GitHub. The token works once, for 7 days, and is not shown again.",
+    "done": "Done"
   }
 }

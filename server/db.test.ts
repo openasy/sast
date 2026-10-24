@@ -12,13 +12,13 @@ describe("openDb", () => {
     first.close();
 
     const second = openDb(path);
-    expect(second.prepare("SELECT COUNT(*) AS n FROM schema_migrations").get()).toEqual({ n: 1 });
+    expect(second.prepare("SELECT COUNT(*) AS n FROM schema_migrations").get()).toEqual({ n: 2 });
     second.close();
   });
 
   it("deletes a repository's scans and findings with it", () => {
     const db = openDb(":memory:");
-    db.exec(`INSERT INTO repositories VALUES ('r', 'acme/web', 'main', 'high', 'now');
+    db.exec(`INSERT INTO repositories (id, name, default_branch, fail_on, created_at) VALUES ('r', 'acme/web', 'main', 'high', 'now');
       INSERT INTO scans VALUES ('s', 'r', 'baseline', 'main', NULL, NULL, 'opengrep', 1, 1, 0, 0, 'high', 'now');
       INSERT INTO findings (repo_id, fingerprint, rule_id, severity, path, message, first_seen, last_seen) VALUES ('r', 'f', 'x', 'low', 'a', 'm', 'now', 'now');
       DELETE FROM repositories`);

@@ -32,6 +32,14 @@
     {
       "name": "Product",
       "description": "Version and overview of this sast."
+    },
+    {
+      "name": "Connections",
+      "description": "GitHub accounts whose repositories sast-agent scans (ADR 0036)."
+    },
+    {
+      "name": "Agents",
+      "description": "sast-agent: enrols once, asks for scan jobs and sends what it found."
     }
   ],
   "paths": {
@@ -1025,6 +1033,750 @@
           }
         }
       }
+    },
+    "/api/v1/connections": {
+      "get": {
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "operationId": "listConnections",
+        "tags": [
+          "Connections"
+        ],
+        "summary": "List connections",
+        "x-openasy-role": "admin",
+        "responses": {
+          "200": {
+            "description": "The connections; never their tokens.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "description": "Needs the admin role."
+      },
+      "post": {
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "operationId": "createConnection",
+        "tags": [
+          "Connections"
+        ],
+        "summary": "Connect a GitHub account",
+        "description": "The token is checked with GitHub, then sealed with openasy-kek. The account's repositories are listed at once. 503 without openasy-kek.\n\nNeeds the owner role.",
+        "x-openasy-role": "owner",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewConnection"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Connected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/connections/{id}": {
+      "delete": {
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "operationId": "deleteConnection",
+        "tags": [
+          "Connections"
+        ],
+        "summary": "Remove a connection",
+        "description": "Its repositories keep their findings, sent from CI from now on.\n\nNeeds the owner role.",
+        "x-openasy-role": "owner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The connection's id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed."
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/connections/sync": {
+      "post": {
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "operationId": "syncConnections",
+        "tags": [
+          "Connections"
+        ],
+        "summary": "List the repositories now",
+        "description": "Instead of waiting for SAST_POLL_MINUTES.\n\nNeeds the admin role.",
+        "x-openasy-role": "admin",
+        "responses": {
+          "200": {
+            "description": "Listed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/rule-sources": {
+      "get": {
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "operationId": "getRuleSources",
+        "tags": [
+          "Connections"
+        ],
+        "summary": "Rule sources",
+        "x-openasy-role": "viewer",
+        "responses": {
+          "200": {
+            "description": "The install's own rule sources.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleSources"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "description": "Needs the viewer role."
+      },
+      "put": {
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "operationId": "setRuleSources",
+        "tags": [
+          "Connections"
+        ],
+        "summary": "Set the rule sources",
+        "description": "Git repositories of Opengrep rules that sast-agent fetches at each scan, next to the rules it ships.\n\nNeeds the admin role.",
+        "x-openasy-role": "admin",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuleSources"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Set.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleSources"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/jobs": {
+      "get": {
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "operationId": "listJobs",
+        "tags": [
+          "Connections"
+        ],
+        "summary": "List scan jobs",
+        "description": "The last 200, newest first.\n\nNeeds the viewer role.",
+        "x-openasy-role": "viewer",
+        "responses": {
+          "200": {
+            "description": "The jobs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/repositories/{id}/scan": {
+      "post": {
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "operationId": "scanRepository",
+        "tags": [
+          "Repositories"
+        ],
+        "summary": "Scan now",
+        "description": "Queues a scan of the default branch's last commit, for a repository from a connection.\n\nNeeds the editor role.",
+        "x-openasy-role": "editor",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The repository's id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/agents": {
+      "get": {
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "operationId": "listAgents",
+        "tags": [
+          "Agents"
+        ],
+        "summary": "List agents",
+        "x-openasy-role": "admin",
+        "responses": {
+          "200": {
+            "description": "The agents.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "description": "Needs the admin role."
+      },
+      "post": {
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "operationId": "createAgent",
+        "tags": [
+          "Agents"
+        ],
+        "summary": "Add an agent",
+        "x-openasy-role": "admin",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewAgent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Added, with its enrolment token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedAgent"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "description": "Needs the admin role."
+      }
+    },
+    "/api/v1/agents/{id}": {
+      "delete": {
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "operationId": "deleteAgent",
+        "tags": [
+          "Agents"
+        ],
+        "summary": "Remove an agent",
+        "x-openasy-role": "admin",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The agent's id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed."
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "description": "Needs the admin role."
+      }
+    },
+    "/api/v1/agent/enroll": {
+      "post": {
+        "operationId": "agentEnroll",
+        "tags": [
+          "Agents"
+        ],
+        "summary": "sast-agent: enrol with a one-time token",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Enroll"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The agent's own secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Enrolled"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/agent/work": {
+      "post": {
+        "operationId": "agentWork",
+        "tags": [
+          "Agents"
+        ],
+        "summary": "sast-agent: ask for a job",
+        "security": [
+          {
+            "agentSecret": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Enroll"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "At most one job, leased for 30 minutes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Work"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/agent/jobs/{id}/sarif": {
+      "post": {
+        "operationId": "agentJobSarif",
+        "tags": [
+          "Agents"
+        ],
+        "summary": "sast-agent: send a job's SARIF",
+        "security": [
+          {
+            "agentSecret": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The job's id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "A SARIF 2.1.0 log."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Kept as a scan of the default branch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobDone"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "413": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/agent/jobs/{id}/failed": {
+      "post": {
+        "operationId": "agentJobFailed",
+        "tags": [
+          "Agents"
+        ],
+        "summary": "sast-agent: say a job failed",
+        "security": [
+          {
+            "agentSecret": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The job's id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobFailed"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Kept as failed."
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1038,7 +1790,7 @@
       "apiToken": {
         "type": "http",
         "scheme": "bearer",
-        "description": "An API token created under Settings \u2192 API tokens (`oa_sast_...`): one role, always an expiry (ADR 0003)."
+        "description": "An API token created under Settings → API tokens (`oa_sast_...`): one role, always an expiry (ADR 0003)."
       },
       "adminToken": {
         "type": "http",
@@ -1049,6 +1801,11 @@
         "type": "http",
         "scheme": "bearer",
         "description": "`SAST_INGEST_TOKEN`: for CI. It can send scans, nothing else."
+      },
+      "agentSecret": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A sast-agent's own secret (`osa_...`), from enrolment."
       }
     },
     "responses": {
@@ -1091,6 +1848,7 @@
               "invalid-body",
               "invalid-sarif",
               "not-found",
+              "conflict",
               "not-configured",
               "payload-too-large",
               "internal-error",
@@ -1330,6 +2088,32 @@
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "github",
+              "ci"
+            ],
+            "description": "github: from a connection, scanned by sast-agent. ci: sent from CI."
+          },
+          "scanEnabled": {
+            "type": "boolean",
+            "description": "Whether sast-agent scans it when its default branch moves."
+          },
+          "headCommit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The default branch's last commit, as the forge said."
+          },
+          "scannedCommit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The last commit sast-agent scanned."
           }
         }
       },
@@ -1361,6 +2145,9 @@
           },
           "failOn": {
             "$ref": "#/components/schemas/FailOn"
+          },
+          "scanEnabled": {
+            "type": "boolean"
           }
         }
       },
@@ -1818,6 +2605,405 @@
           "nextCursor": {
             "type": "string",
             "description": "Pass the previous page's nextCursor to get the next page."
+          }
+        }
+      },
+      "Connection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "kind",
+          "account",
+          "apiUrl",
+          "createdAt",
+          "syncedAt",
+          "error",
+          "repositories"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "github"
+            ]
+          },
+          "account": {
+            "type": "string",
+            "description": "The organization or user whose repositories are scanned.",
+            "examples": [
+              "acme"
+            ]
+          },
+          "apiUrl": {
+            "type": "string",
+            "examples": [
+              "https://api.github.com"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "syncedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The last time its repositories were listed."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the last listing failed, or null."
+          },
+          "repositories": {
+            "type": "integer"
+          }
+        }
+      },
+      "ConnectionList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "connections"
+        ],
+        "properties": {
+          "connections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Connection"
+            }
+          }
+        }
+      },
+      "NewConnection": {
+        "type": "object",
+        "required": [
+          "account",
+          "token"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "github"
+            ]
+          },
+          "account": {
+            "type": "string",
+            "examples": [
+              "acme"
+            ]
+          },
+          "token": {
+            "type": "string",
+            "description": "A GitHub token that reads the account's code: a fine-grained token with Contents and Metadata read. Kept sealed, never returned."
+          }
+        }
+      },
+      "Job": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "repository",
+          "branch",
+          "commit",
+          "status",
+          "attempts",
+          "error",
+          "scanId",
+          "createdAt",
+          "finishedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "done",
+              "failed"
+            ]
+          },
+          "attempts": {
+            "type": "integer"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scanId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finishedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "JobList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "jobs"
+        ],
+        "properties": {
+          "jobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Job"
+            }
+          }
+        }
+      },
+      "RuleSources": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ruleSources"
+        ],
+        "properties": {
+          "ruleSources": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "string"
+            },
+            "description": "https addresses of git repositories with Opengrep rules, run next to the shipped rules. Their licence is the install's to check."
+          }
+        }
+      },
+      "Agent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "status",
+          "version",
+          "lastSeen",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "examples": [
+              "dc1"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "waiting-to-enrol",
+              "online",
+              "offline"
+            ]
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastSeen": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AgentList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "agents"
+        ],
+        "properties": {
+          "agents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Agent"
+            }
+          }
+        }
+      },
+      "NewAgent": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "examples": [
+              "dc1"
+            ]
+          }
+        }
+      },
+      "CreatedAgent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "agent",
+          "enrollToken"
+        ],
+        "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/Agent"
+          },
+          "enrollToken": {
+            "type": "string",
+            "description": "One-time, for 7 days: SAST_ENROLL_TOKEN on the agent. Shown once."
+          }
+        }
+      },
+      "Enroll": {
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "Enrolled": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "secret"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "string",
+            "description": "The agent's own secret, kept in its state volume."
+          }
+        }
+      },
+      "Work": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "jobs"
+        ],
+        "properties": {
+          "jobs": {
+            "type": "array",
+            "maxItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "repository",
+                "cloneUrl",
+                "branch",
+                "commit",
+                "token",
+                "ruleSources"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "repository": {
+                  "type": "string"
+                },
+                "cloneUrl": {
+                  "type": "string"
+                },
+                "branch": {
+                  "type": "string"
+                },
+                "commit": {
+                  "type": "string"
+                },
+                "token": {
+                  "type": "string",
+                  "description": "Reads the repository for the clone."
+                },
+                "ruleSources": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "JobDone": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scanId"
+        ],
+        "properties": {
+          "scanId": {
+            "type": "string"
+          }
+        }
+      },
+      "JobFailed": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
           }
         }
       }

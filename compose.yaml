@@ -1,8 +1,12 @@
-# SAST. CI sends SARIF from any analyser (Opengrep, Semgrep, CodeQL) and gets back whether the check passes (ADR 0036).
+# SAST. CI sends SARIF from any analyser (Opengrep, Semgrep, CodeQL) and gets back whether the check passes, or
+# sast-agent clones and scans the repositories of a connected GitHub account (ADR 0036).
 #
-#   openssl rand -hex 32 > openasy-kek   # sast's key: sign-in secrets (ADR 0021). Keep it with your backups
-#   docker compose up -d
+#   openssl rand -hex 32 > openasy-kek         # sast's key: sign-in secrets and GitHub tokens (ADR 0021)
+#   openssl rand -hex 32 > openasy-agent-kek   # the agent's key: its own secret. Keep both with your backups
+#   docker compose up -d sast
 #   docker compose logs sast | grep 'no owner yet'   # the one-time link that creates the owner account
+#   # GitHub: connect an account, add an agent, then:
+#   SAST_ENROLL_TOKEN=ose_... docker compose up -d sast-agent
 services:
   sast:
     image: ghcr.io/openasy/sast:0.4.0
@@ -27,9 +31,30 @@ services:
       # OPENASY_OIDC_CLIENT_ID: sast
       # OPENASY_OIDC_CLIENT_SECRET: ${OPENASY_OIDC_CLIENT_SECRET}
 
+  sast-agent:
+    image: ghcr.io/openasy/sast-agent:0.4.0 # always the same version as sast
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/scan:size=2g"] # the clone of one repository, deleted after its scan; never on a volume
+    mem_limit: 3g
+    volumes:
+      - sast-agent-data:/data # its secret, sealed with its own key
+    secrets:
+      - source: openasy-agent-kek
+    environment:
+      SAST_URL: http://sast:8080
+      # One-time, from GitHub, Agents; only needed for the first start.
+      SAST_ENROLL_TOKEN: ${SAST_ENROLL_TOKEN:-}
+    depends_on: [sast]
+
 volumes:
   sast-data:
+  sast-agent-data:
 
 secrets:
   openasy-kek:
     file: ./openasy-kek
+  openasy-agent-kek:
+    file: ./openasy-agent-kek

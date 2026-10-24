@@ -3,6 +3,7 @@ import {
   Badge,
   BrandProvider,
   Button,
+  Callout,
   DataTable,
   Dialog,
   EmptyState,
@@ -19,6 +20,7 @@ import {
   SelectField,
   SeverityBadge,
   StatusBadge,
+  Switch,
   Tabs,
   TextField,
   usePath,
@@ -28,11 +30,14 @@ import {
   useAgo,
 } from "@openasy/ui";
 import { AccountSettings, AuthGate, MembersSettings, SignInSettings, TokensSettings, useAuth, useInstallBrand } from "@openasy/auth/react";
-import { Bug, CircleSlash, FolderGit2, KeyRound, LogIn, LogOut, Settings2, Trash2, UserRound, Users, X } from "lucide-react";
+import { Bug, CircleSlash, FolderGit2, GitBranch, KeyRound, LogIn, LogOut, Play, Plus, RefreshCw, Settings2, Trash2, UserRound, Users, X } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import {
   api,
   MfaSetupRequired,
+  type Agent,
+  type Connection,
+  type Job,
   Unauthorized,
   type FailOn,
   type Finding,
@@ -45,7 +50,7 @@ import {
 } from "./api.ts";
 import { useT, type T } from "./i18n.ts";
 
-const PAGES = ["repositories", "setup", "account", "members", "signin", "tokens"] as const;
+const PAGES = ["repositories", "github", "setup", "account", "members", "signin", "tokens"] as const;
 type Route = { page: "findings" | (typeof PAGES)[number] } | { page: "repository" | "scan"; id: string };
 /** The first path segments that are pages of this UI, for followLinks. */
 export const PATHS = ["findings", "repositories", "scans", ...PAGES];
@@ -465,6 +470,16 @@ function RepositoriesPage({ call }: { call: Call }) {
       ),
     },
     { id: "branch", header: t("repositoriesPage.defaultBranch"), mono: true, cell: (r) => r.defaultBranch },
+    {
+      id: "source",
+      header: t("repositoriesPage.source"),
+      cell: (r) =>
+        r.source === "github" ? (
+          <Badge tone={r.scanEnabled ? "info" : "neutral"}>{r.scanEnabled ? t("repositoriesPage.github") : t("repositoriesPage.githubOff")}</Badge>
+        ) : (
+          <Badge>{t("repositoriesPage.ci")}</Badge>
+        ),
+    },
     { id: "open", header: t("repositoriesPage.open"), cell: (r) => <SevCounts counts={r.open} /> },
     {
       id: "last",
@@ -497,7 +512,8 @@ function RepositoriesPage({ call }: { call: Call }) {
           minWidth={760}
           empty={
             <EmptyState title={t("repositoriesPage.noRepositoriesYet")}>
-              {t("repositoriesPage.sendAScanFromCi")} <a href="/setup">{t("repositoriesPage.setup")}</a>.
+              {t("repositoriesPage.connectGithubOrCi")} <a href="/github">{t("repositoriesPage.github")}</a>, <a href="/setup">{t("repositoriesPage.setup")}</a>
+              .
             </EmptyState>
           }
         />
@@ -539,6 +555,14 @@ function RepositoryPage({ call, id, reload }: { call: Call; id: string; reload: 
       setError((err as Error).message);
     }
   };
+  const [queued, setQueued] = useState(false);
+  const setScanning = (on: boolean) =>
+    call(`/api/v1/repositories/${id}`, { method: "PATCH", body: JSON.stringify({ scanEnabled: on }) }).then(load, (err: Error) => setError(err.message));
+  const scanNow = () =>
+    call(`/api/v1/repositories/${id}/scan`, { method: "POST" }).then(
+      () => setQueued(true),
+      (err: Error) => setError(err.message),
+    );
   const remove = () =>
     call(`/api/v1/repositories/${id}`, { method: "DELETE" }).then(
       () => {
@@ -593,6 +617,30 @@ function RepositoryPage({ call, id, reload }: { call: Call; id: string; reload: 
             : undefined
         }
       />
+      {repo?.source === "github" && (
+        <Panel title={t("repositoryPage.scanning")} description={t("repositoryPage.scanningDescription")}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <Switch
+              checked={repo.scanEnabled}
+              onCheckedChange={(on) => void setScanning(on)}
+              disabled={!can("editor")}
+              label={t("repositoryPage.scanThisRepository")}
+              description={
+                repo.scannedCommit
+                  ? repo.scannedCommit === repo.headCommit
+                    ? t("repositoryPage.headScanned", { commit: repo.scannedCommit.slice(0, 8) })
+                    : t("repositoryPage.headNotScanned", { commit: (repo.headCommit ?? "").slice(0, 8) })
+                  : t("repositoryPage.notScannedYet")
+              }
+            />
+            {can("editor") && (
+              <Button icon={<Play />} onClick={() => void scanNow()} disabled={!repo.scanEnabled || queued}>
+                {queued ? t("repositoryPage.queued") : t("repositoryPage.scanNow")}
+              </Button>
+            )}
+          </div>
+        </Panel>
+      )}
       {can("admin") && repo && (
         <Panel title={t("repositoryPage.policy")} description={t("repositoryPage.whatACheckTreatsAs")}>
           <div className="grid gap-2 sm:grid-cols-2">
@@ -747,6 +795,335 @@ function ScanPage({ call, id, reload }: { call: Call; id: string; reload: () => 
   );
 }
 
+// ---------------------------------------------------------------- GitHub
+
+const JOB_TONE = { queued: "neutral", running: "info", done: "success", failed: "danger" } as const;
+const AGENT_TONE = { "waiting-to-enrol": "warning", online: "success", offline: "danger" } as const;
+
+/** GitHub accounts sast follows, the agents that scan them, extra rule sources and the scan queue (ADR 0036). */
+function GithubPage({ call, reload }: { call: Call; reload: () => void }) {
+  const ago = useAgo();
+  const t = useT();
+  const { can } = useAuth();
+  const [connections, setConnections] = useState<Connection[]>();
+  const [agents, setAgents] = useState<Agent[]>();
+  const [jobs, setJobs] = useState<Job[]>();
+  const [sources, setSources] = useState<string[]>([]);
+  const [newSource, setNewSource] = useState("");
+  const [sourceError, setSourceError] = useState<string>();
+  const [adding, setAdding] = useState(false);
+  const [account, setAccount] = useState("");
+  const [token, setToken] = useState("");
+  const [connectError, setConnectError] = useState<string>();
+  const [agentName, setAgentName] = useState("");
+  const [agentError, setAgentError] = useState<string>();
+  const [enrolment, setEnrolment] = useState<{ name: string; token: string }>();
+  const [syncing, setSyncing] = useState(false);
+
+  const load = useCallback(() => {
+    call<{ connections: Connection[] }>("/api/v1/connections").then(
+      (r) => setConnections(r.connections),
+      () => setConnections([]),
+    );
+    call<{ agents: Agent[] }>("/api/v1/agents").then(
+      (r) => setAgents(r.agents),
+      () => setAgents([]),
+    );
+    call<{ jobs: Job[] }>("/api/v1/jobs").then(
+      (r) => setJobs(r.jobs),
+      () => setJobs([]),
+    );
+    call<{ ruleSources: string[] }>("/api/v1/rule-sources").then(
+      (r) => setSources(r.ruleSources),
+      () => {},
+    );
+  }, [call]);
+  useEffect(() => {
+    load();
+    const timer = setInterval(load, 10_000);
+    return () => clearInterval(timer);
+  }, [load]);
+
+  const closeConnect = () => (setAdding(false), setAccount(""), setToken(""), setConnectError(undefined));
+  const connect = async (e: FormEvent) => {
+    e.preventDefault();
+    try {
+      await call("/api/v1/connections", { method: "POST", body: JSON.stringify({ kind: "github", account, token }) });
+      closeConnect();
+      load();
+      reload();
+    } catch (err) {
+      setConnectError((err as Error).message);
+    }
+  };
+  const disconnect = (c: Connection) => call(`/api/v1/connections/${c.id}`, { method: "DELETE" }).then(load, () => {});
+  const sync = () => {
+    setSyncing(true);
+    call("/api/v1/connections/sync", { method: "POST" })
+      .then(
+        () => (load(), reload()),
+        () => {},
+      )
+      .finally(() => setSyncing(false));
+  };
+  const addAgent = async (e: FormEvent) => {
+    e.preventDefault();
+    try {
+      const r = await call<{ agent: Agent; enrollToken: string }>("/api/v1/agents", { method: "POST", body: JSON.stringify({ name: agentName.trim() }) });
+      setEnrolment({ name: r.agent.name, token: r.enrollToken });
+      setAgentName("");
+      setAgentError(undefined);
+      load();
+    } catch (err) {
+      setAgentError((err as Error).message);
+    }
+  };
+  const removeAgent = (a: Agent) => call(`/api/v1/agents/${a.id}`, { method: "DELETE" }).then(load, () => {});
+  const saveSources = async (next: string[]) => {
+    try {
+      const r = await call<{ ruleSources: string[] }>("/api/v1/rule-sources", { method: "PUT", body: JSON.stringify({ ruleSources: next }) });
+      setSources(r.ruleSources);
+      setNewSource("");
+      setSourceError(undefined);
+    } catch (err) {
+      setSourceError((err as Error).message);
+    }
+  };
+
+  const connectionColumns: Column<Connection>[] = [
+    { id: "account", header: t("githubPage.account"), cell: (c) => <span className="font-medium">{c.account}</span> },
+    { id: "repos", header: t("githubPage.repositories"), align: "right", cell: (c) => c.repositories },
+    {
+      id: "synced",
+      header: t("githubPage.lastLook"),
+      cell: (c) =>
+        c.error ? <StatusBadge tone="danger">{c.error}</StatusBadge> : <span className="text-xs">{c.syncedAt ? ago(c.syncedAt) : t("githubPage.notYet")}</span>,
+    },
+    ...(can("owner")
+      ? [
+          {
+            id: "remove",
+            header: <span className="sr-only">{t("githubPage.actions")}</span>,
+            width: "56px",
+            cell: (c: Connection) => (
+              <IconButton label={t("githubPage.disconnect", { account: c.account })} size="sm" onClick={() => void disconnect(c)}>
+                <Trash2 />
+              </IconButton>
+            ),
+          } satisfies Column<Connection>,
+        ]
+      : []),
+  ];
+  const agentColumns: Column<Agent>[] = [
+    { id: "name", header: t("githubPage.name"), mono: true, cell: (a) => a.name },
+    { id: "status", header: t("githubPage.status"), cell: (a) => <StatusBadge tone={AGENT_TONE[a.status]}>{t(`githubPage.agent.${a.status}`)}</StatusBadge> },
+    { id: "version", header: t("githubPage.version"), mono: true, cell: (a) => a.version ?? "–" },
+    { id: "seen", header: t("githubPage.lastSeen"), cell: (a) => <span className="text-xs">{a.lastSeen ? ago(a.lastSeen) : "–"}</span> },
+    {
+      id: "remove",
+      header: <span className="sr-only">{t("githubPage.actions")}</span>,
+      width: "56px",
+      cell: (a) => (
+        <IconButton label={t("githubPage.removeAgent", { name: a.name })} size="sm" onClick={() => void removeAgent(a)}>
+          <Trash2 />
+        </IconButton>
+      ),
+    },
+  ];
+  const jobColumns: Column<Job>[] = [
+    { id: "repo", header: t("githubPage.repository"), cell: (j) => <span className="text-xs">{j.repository}</span> },
+    {
+      id: "commit",
+      header: t("githubPage.commit"),
+      cell: (j) => (
+        <span className="font-mono text-xs">
+          {j.branch} {j.commit.slice(0, 8)}
+        </span>
+      ),
+    },
+    {
+      id: "status",
+      header: t("githubPage.status"),
+      cell: (j) =>
+        j.status === "done" && j.scanId ? (
+          <a href={`/scans/${j.scanId}`}>
+            <StatusBadge tone="success">{t("githubPage.job.done")}</StatusBadge>
+          </a>
+        ) : (
+          <span className="flex min-w-0 flex-col gap-0.5">
+            <span>
+              <StatusBadge tone={JOB_TONE[j.status]}>{t(`githubPage.job.${j.status}`)}</StatusBadge>
+            </span>
+            {j.error && <span className="sast-clamp text-xs text-fg-muted">{j.error}</span>}
+          </span>
+        ),
+    },
+    {
+      id: "when",
+      header: t("githubPage.queued"),
+      sortValue: (j) => j.createdAt,
+      cell: (j) => <span className="text-xs whitespace-nowrap">{ago(j.createdAt)}</span>,
+    },
+  ];
+
+  const origin = window.location.origin;
+  const noAgent = agents !== undefined && !agents.some((a) => a.status === "online");
+  return (
+    <>
+      <PageHeader
+        title={t("githubPage.title")}
+        description={t("githubPage.description")}
+        actions={
+          <>
+            <Button icon={<RefreshCw />} onClick={sync} disabled={syncing || !connections?.length}>
+              {t("githubPage.lookNow")}
+            </Button>
+            {can("owner") && (
+              <Button variant="primary" icon={<Plus />} onClick={() => setAdding(true)}>
+                {t("githubPage.connectAccount")}
+              </Button>
+            )}
+          </>
+        }
+      />
+      {noAgent && !!connections?.length && (
+        <Callout tone="warning" title={t("githubPage.noAgentOnline")}>
+          {t("githubPage.noAgentOnlineDetail")}
+        </Callout>
+      )}
+      <Panel title={t("githubPage.accounts")} description={t("githubPage.accountsDescription")} flush>
+        <DataTable
+          label={t("githubPage.accounts")}
+          columns={connectionColumns}
+          rows={connections ?? []}
+          loading={!connections}
+          getRowId={(c) => c.id}
+          minWidth={560}
+          empty={<EmptyState title={t("githubPage.noAccounts")}>{t("githubPage.noAccountsDetail")}</EmptyState>}
+        />
+      </Panel>
+      <Panel title={t("githubPage.agents")} description={t("githubPage.agentsDescription")} flush>
+        <DataTable
+          label={t("githubPage.agents")}
+          columns={agentColumns}
+          rows={agents ?? []}
+          loading={!agents}
+          getRowId={(a) => a.id}
+          minWidth={560}
+          empty={<EmptyState title={t("githubPage.noAgents")}>{t("githubPage.noAgentsDetail")}</EmptyState>}
+        />
+        <form className="flex flex-wrap items-end gap-2 border-t border-line p-3" onSubmit={(e) => void addAgent(e)}>
+          <TextField
+            label={t("githubPage.agentName")}
+            value={agentName}
+            onChange={(e) => setAgentName(e.target.value)}
+            hint={t("githubPage.agentNameHint")}
+            error={agentError}
+            mono
+          />
+          <Button type="submit" icon={<Plus />} disabled={!agentName.trim()}>
+            {t("githubPage.addAgent")}
+          </Button>
+        </form>
+      </Panel>
+      <Panel title={t("githubPage.ruleSources")} description={t("githubPage.ruleSourcesDescription")}>
+        <div className="flex flex-col gap-2">
+          {sources.length === 0 && <p className="m-0 text-sm text-fg-muted">{t("githubPage.onlyShippedRules")}</p>}
+          {sources.map((s) => (
+            <div key={s} className="flex items-center gap-2">
+              <Badge mono>{s}</Badge>
+              <IconButton label={t("githubPage.removeSource", { url: s })} size="sm" onClick={() => void saveSources(sources.filter((x) => x !== s))}>
+                <X />
+              </IconButton>
+            </div>
+          ))}
+          <form
+            className="flex flex-wrap items-end gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void saveSources([...sources, newSource.trim()]);
+            }}
+          >
+            <TextField
+              label={t("githubPage.ruleSourceUrl")}
+              value={newSource}
+              onChange={(e) => setNewSource(e.target.value)}
+              placeholder="https://github.com/acme/opengrep-rules"
+              hint={t("githubPage.ruleSourceHint")}
+              error={sourceError}
+              className="w-96"
+              mono
+            />
+            <Button type="submit" icon={<Plus />} disabled={!newSource.trim()}>
+              {t("githubPage.addSource")}
+            </Button>
+          </form>
+        </div>
+      </Panel>
+      <Panel title={t("githubPage.scanJobs")} description={t("githubPage.scanJobsDescription")} flush>
+        <DataTable
+          label={t("githubPage.scanJobs")}
+          columns={jobColumns}
+          rows={jobs ?? []}
+          loading={!jobs}
+          getRowId={(j) => j.id}
+          minWidth={640}
+          pageSize={25}
+          empty={<EmptyState title={t("githubPage.noJobs")}>{t("githubPage.noJobsDetail")}</EmptyState>}
+        />
+      </Panel>
+
+      <Dialog
+        open={adding}
+        onOpenChange={(open) => !open && closeConnect()}
+        title={t("githubPage.connectAccount")}
+        description={t("githubPage.connectDescription")}
+        onSubmit={connect}
+        footer={
+          <>
+            <Button type="button" onClick={closeConnect}>
+              {t("githubPage.cancel")}
+            </Button>
+            <Button type="submit" variant="primary" disabled={!account.trim() || token.trim().length < 20}>
+              {t("githubPage.connect")}
+            </Button>
+          </>
+        }
+      >
+        <TextField label={t("githubPage.account")} value={account} onChange={(e) => setAccount(e.target.value)} hint={t("githubPage.accountHint")} />
+        <TextField
+          label={t("githubPage.token")}
+          type="password"
+          autoComplete="off"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          hint={t("githubPage.tokenHint")}
+          error={connectError}
+          mono
+        />
+      </Dialog>
+      <Dialog
+        open={!!enrolment}
+        onOpenChange={(open) => !open && setEnrolment(undefined)}
+        title={t("githubPage.startAgent", { name: enrolment?.name ?? "" })}
+        description={t("githubPage.startAgentDescription")}
+        footer={
+          <Button type="button" variant="primary" onClick={() => setEnrolment(undefined)}>
+            {t("githubPage.done")}
+          </Button>
+        }
+      >
+        <Code>{`openssl rand -hex 32 > openasy-agent-kek
+docker run -d --name sast-agent --restart unless-stopped --read-only --tmpfs /scan:size=2g \\
+  --cap-drop ALL --security-opt no-new-privileges --memory 3g \\
+  -v sast-agent-data:/data -v "$PWD/openasy-agent-kek:/run/secrets/openasy-agent-kek:ro" \\
+  -e SAST_URL=${origin} -e SAST_ENROLL_TOKEN=${enrolment?.token ?? ""} \\
+  ghcr.io/openasy/sast-agent:${__APP_VERSION__}`}</Code>
+      </Dialog>
+    </>
+  );
+}
+
 // ---------------------------------------------------------------- Setup
 
 function SetupPage() {
@@ -857,6 +1234,7 @@ function Product() {
     { id: "setup", label: msg("product.setup"), icon: Settings2 },
     ...(can("admin")
       ? [
+          { id: "github", label: msg("product.github"), icon: GitBranch },
           { id: "members", label: msg("product.members"), icon: Users },
           { id: "signin", label: msg("product.signIn"), icon: LogIn },
           { id: "tokens", label: msg("product.apiTokens"), icon: KeyRound },
@@ -889,6 +1267,12 @@ function Product() {
         <FindingsPage call={call} summary={summary} reload={reload} />
       ) : route.page === "repositories" ? (
         <RepositoriesPage call={call} />
+      ) : route.page === "github" ? (
+        can("admin") ? (
+          <GithubPage call={call} reload={reload} />
+        ) : (
+          <EmptyState title={msg("settingsPage.adminsOnly")}>{msg("settingsPage.askAnAdminOfThis")}</EmptyState>
+        )
       ) : route.page === "repository" ? (
         <RepositoryPage key={route.id} call={call} id={route.id} reload={reload} />
       ) : route.page === "scan" ? (

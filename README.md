@@ -14,8 +14,10 @@ CI: opengrep scan --sarif-output=results.sarif  ──POST /api/v1/scans──�
                                                                            └── baseline: the default branch's findings, triage, history
 ```
 
-sast reads SARIF and nothing else: it holds no scanner and runs no one's code. Cloning repositories and scanning them
-in an agent, and checks posted to GitHub and GitLab, come next (ADR 0036).
+Or connect a GitHub account: sast follows its repositories and
+[sast-agent](https://github.com/openasy/sast-agent) clones and scans each default branch when it moves. Either way
+sast reads SARIF and nothing else: it holds no scanner, no source code and runs no one's code. Checks posted to GitHub
+and GitLab come next (ADR 0036).
 
 ## How a scan is compared
 
@@ -28,6 +30,24 @@ in an agent, and checks posted to GitHub and GitLab, come next (ADR 0036).
   new. A second copy of the same code is a new finding.
 - A **false positive** or **accepted risk** (with a reason, and an end date for accepted risk) follows the finding to
   every branch. A finding that is only in a pull request can be triaged too.
+
+## Repositories from GitHub
+
+Under GitHub, an owner connects an organization or user with a token. A fine-grained token with read access to
+**Contents** and **Metadata** of the account's repositories is enough; sast checks it with GitHub, keeps it sealed with
+`openasy-kek` and never shows it again.
+
+- sast lists the account's repositories every few minutes (`SAST_POLL_MINUTES`), leaves archived ones and other
+  owners' out, and queues a scan of a default branch whenever its latest commit is not scanned yet. A quiet account
+  costs one GitHub call per 100 repositories.
+- A repository can be turned off on its own page; its queued scans are dropped. **Scan now** queues the latest commit
+  again.
+- An admin adds agents under GitHub; each gets a one-time enrolment token and a command to start it. An agent asks for
+  a job, receives the commit, the clone URL and the token, scans in memory and sends SARIF back. A job an agent does
+  not finish within 30 minutes goes back to the queue, three times at most.
+- The agent ships OpenAsy's own Opengrep rules. Admins may add public rule repositories under GitHub, Rule sources;
+  their content and licence are the install's responsibility.
+- Removing a connection keeps its repositories, their findings and triage; they become CI repositories.
 
 ## Run
 
@@ -54,7 +74,7 @@ jq -e '.passed' scan.json
 `repository` and `branch` are required. A new repository uses `main` as its default branch unless you send
 `defaultBranch`. The body may be gzipped (`Content-Encoding: gzip`), up to 64 MiB unpacked and 50,000 results.
 
-`openasy-kek` encrypts sign-in secrets in sast's database (ADR 0021). Keep it apart from the volume and with your
+`openasy-kek` encrypts sign-in secrets and forge tokens in sast's database (ADR 0021). Keep it apart from the volume and with your
 backups.
 
 | Variable | Default | |
@@ -66,6 +86,8 @@ backups.
 | `SAST_SECRETS_KEY_FILE` | `/run/secrets/openasy-kek` | 32-byte key-encryption key |
 | `SAST_DB` | `/data/sast.db` | SQLite file (WAL), on the `/data` volume |
 | `SAST_RETENTION_DAYS` | `365` | Scans, and fixed findings nobody triaged, older than this are deleted |
+| `SAST_POLL_MINUTES` | `5` | How often connected GitHub accounts are looked at |
+| `SAST_GITHUB_API` | `https://api.github.com` | The GitHub API, such as `https://github.example.com/api/v3` for GitHub Enterprise Server |
 | `SAST_METRICS_PORT` | | Serve `/metrics` on this port only (ADR 0026) |
 | `SAST_HEADLESS` | `false` | `true` serves only the API |
 | `SAST_PASSWORD_SIGN_IN`, `OPENASY_OIDC_*` | | Sign-in, as in every OpenAsy product ([@openasy/auth](https://github.com/openasy/auth)). Owners can also add identity providers under Settings, Sign-in |

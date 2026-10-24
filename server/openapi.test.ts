@@ -27,7 +27,26 @@ let base: string;
 const covered = new Set<string>();
 
 beforeAll(async () => {
-  app = await startApp({ version, openapi: spec, docsDir });
+  // GitHub as the connection sees it: the token's user, one repository of acme, and its default branch.
+  const github = async (url: string | URL | Request) => {
+    const u = new URL(String(url));
+    const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    if (u.pathname === "/user") return ok({ login: "dev" });
+    if (u.pathname === "/user/repos")
+      return ok([
+        {
+          full_name: "acme/svc",
+          owner: { login: "acme" },
+          clone_url: "https://github.com/acme/svc.git",
+          default_branch: "main",
+          archived: false,
+          pushed_at: "2026-10-24T00:00:00Z",
+        },
+      ]);
+    if (u.pathname.startsWith("/repos/acme/svc/branches/")) return ok({ commit: { sha: "e".repeat(40) } });
+    return new Response("{}", { status: 404 });
+  };
+  app = await startApp({ version, openapi: spec, docsDir, forgeOptions: { githubApi: "https://github.test", fetch: github as typeof fetch } });
   base = app.base;
 });
 
@@ -184,6 +203,61 @@ describe("responses match openapi.json", () => {
     await call("DELETE", "/api/v1/repositories/{id}", admin(), `/api/v1/repositories/${repo}`);
     await call("DELETE", "/api/v1/repositories/{id}", admin(), `/api/v1/repositories/${repo}`);
     await call("DELETE", "/api/v1/repositories/{id}", { method: "DELETE" }, "/api/v1/repositories/x");
+  });
+
+  it("connections, scan jobs and the agent", async () => {
+    const connection = (await call("POST", "/api/v1/connections", admin({ account: "acme", token: "github_pat_0123456789abcdefghijkl" }))).body as {
+      id: string;
+    };
+    await call("POST", "/api/v1/connections", admin({ account: "acme", token: "github_pat_0123456789abcdefghijkl" }));
+    await call("POST", "/api/v1/connections", admin({ account: "", token: "x" }));
+    await call("POST", "/api/v1/connections", admin("nope"));
+    await call("GET", "/api/v1/connections", admin());
+    await call("POST", "/api/v1/connections/sync", admin());
+    await call("GET", "/api/v1/jobs", admin());
+    await call("PUT", "/api/v1/rule-sources", admin({ ruleSources: ["https://github.com/acme/rules"] }));
+    await call("PUT", "/api/v1/rule-sources", admin({ ruleSources: ["ftp://x"] }));
+    await call("PUT", "/api/v1/rule-sources", admin("nope"));
+    await call("GET", "/api/v1/rule-sources", admin());
+
+    const made = (await call("POST", "/api/v1/agents", admin({ name: "dc1" }))).body as { agent: { id: string }; enrollToken: string };
+    await call("POST", "/api/v1/agents", admin({ name: "dc1" }));
+    await call("POST", "/api/v1/agents", admin({ name: "Not OK" }));
+    await call("POST", "/api/v1/agents", admin("nope"));
+    await call("GET", "/api/v1/agents", admin());
+    await call("POST", "/api/v1/agent/enroll", { body: JSON.stringify({ token: "ose_wrong" }) });
+    await call("POST", "/api/v1/agent/enroll", { body: "nope" });
+    const { secret } = (await call("POST", "/api/v1/agent/enroll", { body: JSON.stringify({ token: made.enrollToken, version: "0.1.0" }) })).body as {
+      secret: string;
+    };
+    await call("POST", "/api/v1/agent/work", auth("osa_wrong", "{}"));
+    await call("POST", "/api/v1/agent/work", auth(secret, "nope"));
+    const { jobs } = (await call("POST", "/api/v1/agent/work", auth(secret, JSON.stringify({ version: "0.1.0" })))).body as { jobs: Array<{ id: string }> };
+    await call("POST", "/api/v1/agent/jobs/{id}/sarif", auth(secret, "nope"), `/api/v1/agent/jobs/${jobs[0]!.id}/sarif`);
+    await call("POST", "/api/v1/agent/jobs/{id}/sarif", auth(secret, sarif({ rule: "x", path: "a.js" })), `/api/v1/agent/jobs/${jobs[0]!.id}/sarif`);
+    await call("POST", "/api/v1/agent/jobs/{id}/sarif", auth(secret, sarif()), `/api/v1/agent/jobs/${jobs[0]!.id}/sarif`);
+    await call("POST", "/api/v1/agent/jobs/{id}/sarif", auth("osa_wrong", sarif()), `/api/v1/agent/jobs/${jobs[0]!.id}/sarif`);
+
+    const repo = ((await call("GET", "/api/v1/repositories", admin())).body as { repositories: Array<{ id: string; name: string }> }).repositories.find(
+      (r) => r.name === "acme/svc",
+    )!;
+    await call("POST", "/api/v1/repositories/{id}/scan", admin(), `/api/v1/repositories/${repo.id}/scan`);
+    await call("POST", "/api/v1/repositories/{id}/scan", admin(), "/api/v1/repositories/missing/scan");
+    const again = (await call("POST", "/api/v1/agent/work", auth(secret, "{}"))).body as { jobs: Array<{ id: string }> };
+    await call(
+      "POST",
+      "/api/v1/agent/jobs/{id}/failed",
+      auth(secret, JSON.stringify({ error: "clone timed out" })),
+      `/api/v1/agent/jobs/${again.jobs[0]!.id}/failed`,
+    );
+    await call("POST", "/api/v1/agent/jobs/{id}/failed", auth(secret, "nope"), `/api/v1/agent/jobs/${again.jobs[0]!.id}/failed`);
+    await call("POST", "/api/v1/agent/jobs/{id}/failed", auth(secret, "{}"), `/api/v1/agent/jobs/${again.jobs[0]!.id}/failed`);
+    await call("POST", "/api/v1/agent/jobs/{id}/failed", auth("osa_wrong", "{}"), `/api/v1/agent/jobs/${again.jobs[0]!.id}/failed`);
+
+    await call("DELETE", "/api/v1/agents/{id}", admin(), `/api/v1/agents/${made.agent.id}`);
+    await call("DELETE", "/api/v1/agents/{id}", admin(), "/api/v1/agents/missing");
+    await call("DELETE", "/api/v1/connections/{id}", admin(), `/api/v1/connections/${connection.id}`);
+    await call("DELETE", "/api/v1/connections/{id}", admin(), "/api/v1/connections/missing");
   });
 
   it("covers every operation in openapi.json", () => {

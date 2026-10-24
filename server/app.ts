@@ -9,11 +9,14 @@ import { log } from "./log.ts";
 import { countRequest, renderMetrics } from "./metrics.ts";
 import type { ProductLink } from "./products.ts";
 import type { Severity } from "./sarif.ts";
+import type { Forge } from "./forge.ts";
 import { parseLimit, SastError, SEVERITIES, type FindingFilter, type ProblemCode, type Sast, type Status } from "./sast.ts";
 
 export interface AppOptions {
   db: DatabaseSync;
   sast: Sast;
+  /** Forge connections, scan jobs and the agents that run them (ADR 0036). */
+  forge: Forge;
   version: string;
   /** Sign-in, sessions, members and API tokens (ADR 0002, 0003). */
   auth: Auth;
@@ -85,6 +88,7 @@ const TITLES: Record<ProblemCode, string> = {
   "invalid-body": "Invalid request body",
   "invalid-sarif": "Invalid SARIF",
   "not-found": "Not found",
+  conflict: "Conflict",
   "not-configured": "Not configured",
   "payload-too-large": "Payload too large",
   "internal-error": "Internal error",
@@ -151,7 +155,7 @@ function tokenMatches(header: string | undefined, expected: string | undefined):
 }
 
 /** The role a route needs (ADR 0003), or "ingest" for scans sent from CI. */
-type Access = "none" | "ingest" | Role;
+type Access = "none" | "ingest" | "agent" | Role;
 interface Ctx {
   req: IncomingMessage;
   res: ServerResponse;
@@ -160,6 +164,8 @@ interface Ctx {
   body: () => Promise<Record<string, unknown>>;
   /** Who made the request, for the audit trail of a decision. */
   actor: () => string;
+  /** On "agent" routes: the enrolled sast-agent that sent the request. */
+  agent: string;
 }
 interface Route {
   method: string;
@@ -181,7 +187,20 @@ function findingFilter(url: URL, repoId?: string): FindingFilter {
   return { status: status as Status, severity, q: q || undefined, repoId: repoId ?? url.searchParams.get("repository") ?? undefined };
 }
 
-export function createApp({ db, sast, version, auth, adminToken, ingestToken, webDir, docsDir, openapi, serveMetrics = true, products = [] }: AppOptions) {
+export function createApp({
+  db,
+  sast,
+  forge,
+  version,
+  auth,
+  adminToken,
+  ingestToken,
+  webDir,
+  docsDir,
+  openapi,
+  serveMetrics = true,
+  products = [],
+}: AppOptions) {
   // The served description includes /api/v1/auth from @openasy/auth, so the API reference documents sign-in too.
   const spec = openapi && JSON.stringify({ ...mergeOpenApi(openapi), info: { ...(openapi.info as object), version } });
   const noContent = (res: ServerResponse) => {
@@ -212,6 +231,49 @@ export function createApp({ db, sast, version, auth, adminToken, ingestToken, we
       },
     },
     { method: "GET", path: "/api/v1/scans/:id", auth: "viewer", handle: ({ params }) => sast.scan(params[0]!) },
+
+    // Repositories from a forge, scanned by sast-agent (ADR 0036). A token reads code, so connections are the owner's.
+    { method: "GET", path: "/api/v1/connections", auth: "admin", handle: () => ({ connections: forge.listConnections() }) },
+    {
+      method: "POST",
+      path: "/api/v1/connections",
+      auth: "owner",
+      handle: async ({ res, body }) => {
+        const c = await forge.createConnection(await body());
+        // The account's repositories, and their first scans, without waiting for the next look.
+        void forge.poll();
+        json(res, 201, c);
+      },
+    },
+    { method: "DELETE", path: "/api/v1/connections/:id", auth: "owner", handle: ({ res, params }) => (forge.deleteConnection(params[0]!), noContent(res)) },
+    { method: "POST", path: "/api/v1/connections/sync", auth: "admin", handle: async () => (await forge.poll(), { connections: forge.listConnections() }) },
+    { method: "GET", path: "/api/v1/rule-sources", auth: "viewer", handle: () => ({ ruleSources: forge.ruleSources() }) },
+    {
+      method: "PUT",
+      path: "/api/v1/rule-sources",
+      auth: "admin",
+      handle: async ({ body }) => ({ ruleSources: forge.setRuleSources((await body()).ruleSources) }),
+    },
+    { method: "GET", path: "/api/v1/jobs", auth: "viewer", handle: () => ({ jobs: forge.listJobs() }) },
+    { method: "POST", path: "/api/v1/repositories/:id/scan", auth: "editor", handle: ({ res, params }) => json(res, 201, forge.scanNow(params[0]!)) },
+    { method: "GET", path: "/api/v1/agents", auth: "admin", handle: () => ({ agents: forge.listAgents() }) },
+    { method: "POST", path: "/api/v1/agents", auth: "admin", handle: async ({ res, body }) => json(res, 201, forge.createAgent(await body())) },
+    { method: "DELETE", path: "/api/v1/agents/:id", auth: "admin", handle: ({ res, params }) => (forge.deleteAgent(params[0]!), noContent(res)) },
+    // sast-agent: enrol once with the token, then ask for work and send back what a scan found.
+    { method: "POST", path: "/api/v1/agent/enroll", auth: "none", handle: async ({ body }) => forge.enroll(await body()) },
+    { method: "POST", path: "/api/v1/agent/work", auth: "agent", handle: async ({ agent, body }) => forge.work(agent, (await body()).version) },
+    {
+      method: "POST",
+      path: "/api/v1/agent/jobs/:id/sarif",
+      auth: "agent",
+      handle: async ({ req, agent, params }) => forge.complete(agent, params[0]!, await readBody(req, SARIF_LIMIT)),
+    },
+    {
+      method: "POST",
+      path: "/api/v1/agent/jobs/:id/failed",
+      auth: "agent",
+      handle: async ({ res, agent, params, body }) => (forge.fail(agent, params[0]!, await body()), noContent(res)),
+    },
 
     // Repositories.
     { method: "GET", path: "/api/v1/repositories", auth: "viewer", handle: ({ url }) => page("repositories", sast.listRepositories(cursor(url), limit(url))) },
@@ -252,6 +314,11 @@ export function createApp({ db, sast, version, auth, adminToken, ingestToken, we
   /** Returns who is calling, or null for the ingest token. */
   function authorize(req: IncomingMessage, access: Access): string | null {
     if (access === "none") return null;
+    if (access === "agent") {
+      const agent = forge.agentBySecret(req.headers.authorization);
+      if (!agent) throw new SastError(401, "invalid-token", "Send the agent's own secret, from enrolment, as a bearer token.");
+      return agent;
+    }
     if (access === "ingest" && tokenMatches(req.headers.authorization, ingestToken)) return null;
     if (tokenMatches(req.headers.authorization, adminToken)) return "admin token";
     if (access === "ingest") {
@@ -309,7 +376,7 @@ export function createApp({ db, sast, version, auth, adminToken, ingestToken, we
       try {
         const who = authorize(req, r.auth);
         const params = m.slice(1).map(decodeURIComponent);
-        const result = await r.handle({ req, res, url, params, body: () => readJson(req), actor: () => who ?? "unknown" });
+        const result = await r.handle({ req, res, url, params, body: () => readJson(req), actor: () => who ?? "unknown", agent: who ?? "" });
         if (!res.headersSent && result !== undefined) json(res, 200, result);
       } catch (err) {
         if (err instanceof AuthError) {
