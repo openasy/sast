@@ -9,7 +9,7 @@
 #   SAST_ENROLL_TOKEN=ose_... docker compose up -d sast-agent
 services:
   sast:
-    image: ghcr.io/openasy/sast:0.4.0
+    image: ghcr.io/openasy/sast:0.5.0
     restart: unless-stopped
     read_only: true
     cap_drop: [ALL]
@@ -32,7 +32,7 @@ services:
       # OPENASY_OIDC_CLIENT_SECRET: ${OPENASY_OIDC_CLIENT_SECRET}
 
   sast-agent:
-    image: ghcr.io/openasy/sast-agent:0.4.0 # always the same version as sast
+    image: ghcr.io/openasy/sast-agent:0.5.0 # always the same version as sast
     restart: unless-stopped
     read_only: true
     cap_drop: [ALL]
