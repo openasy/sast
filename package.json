@@ -1,6 +1,6 @@
 {
   "name": "@openasy/sast",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "description": "OpenAsy SAST: static analysis findings from every pull request, with only what is new blocking it.",
   "license": "AGPL-3.0-only",
