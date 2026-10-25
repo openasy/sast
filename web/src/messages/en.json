@@ -106,6 +106,9 @@
     "itsScansFindingsAndDecisions": "Its scans, findings and decisions are deleted. A later scan creates it again, without them.",
     "cancel": "Cancel",
     "delete2": "Delete",
+    "findingsOverTime": "Findings over time",
+    "whatEachScanOfThe": "What each scan of the default branch reported, of the last 50 scans.",
+    "findingsInEachScanOf": "Findings in each scan of {{name}}",
     "scans": "Scans",
     "noScans": "No scans",
     "nothingHasBeenSentFor": "Nothing has been sent for this repository.",
@@ -271,5 +274,10 @@
     "yaml": "Rules",
     "cancel": "Cancel",
     "save": "Save"
+  },
+  "search": {
+    "repository": "Repository",
+    "finding": "Finding",
+    "open": "{{open}} open"
   }
 }
