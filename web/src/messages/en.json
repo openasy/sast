@@ -78,7 +78,8 @@
     "source": "Source",
     "ci": "CI",
     "connectGithubOrCi": "Connect a GitHub or GitLab account, or send a scan from CI. See",
-    "forgeOff": "{{forge}}, off"
+    "forgeOff": "{{forge}}, off",
+    "archived": "Archived"
   },
   "repositoryPage": {
     "repositoryNotFound": "Repository not found",
@@ -118,7 +119,10 @@
     "headNotScanned": "The latest commit, {{commit}}, is not scanned yet.",
     "notScannedYet": "Not scanned yet.",
     "scanNow": "Scan now",
-    "queued": "Queued"
+    "queued": "Queued",
+    "setInTheFile": "The repositories file says whether this repository is scanned.",
+    "archivedTitle": "Archived {{ago}}",
+    "archivedDetail": "It is archived on its forge, or gone from the account. It is no longer scanned and its findings are not counted as open; it comes back, with them, once it is active there again."
   },
   "scanPage": {
     "scanNotFound": "Scan not found",
@@ -171,7 +175,8 @@
     "apiTokens": "API tokens",
     "account": "Account",
     "github": "GitHub and GitLab",
-    "rules": "Rules"
+    "rules": "Rules",
+    "overview": "Overview"
   },
   "failOn": {
     "critical": "Critical",
@@ -190,19 +195,18 @@
     "title": "GitHub and GitLab",
     "description": "sast follows the repositories of the GitHub and GitLab accounts here, not archived ones. An agent scans each default branch when it moves, and each open pull request or merge request into it, whose result goes back to the forge as the commit status OpenAsy SAST and one comment listing what it adds. Code stays with the agent; sast keeps only findings.",
     "lookNow": "Look now",
-    "connectAccount": "Connect account",
     "noAgentOnline": "No agent is online",
     "noAgentOnlineDetail": "Scans wait in the queue until an agent asks for them. Add one below and start it with its command.",
     "accounts": "Accounts",
-    "accountsDescription": "Looked at every few minutes. A repository can be turned off on its own page.",
+    "accountsDescription": "From {{path}}, looked at every few minutes. A repository can be turned off on its own page, unless the file says.",
     "account": "Account",
     "repositories": "Repositories",
     "lastLook": "Last look",
     "notYet": "Not yet",
     "actions": "Actions",
     "disconnect": "Disconnect {{account}}",
-    "noAccounts": "No accounts connected",
-    "noAccountsDetail": "Connect a GitHub organization or user, or a GitLab group or user, with a token that reads its code.",
+    "noAccounts": "No accounts yet",
+    "noAccountsDetail": "Add the GitHub organizations and GitLab groups to the repositories file, and put each token in secrets/sast.env under the name the file gives it. A change to the file is applied within a minute; a new token needs a restart of sast.",
     "agents": "Agents",
     "agentsDescription": "sast-agent clones and scans the code, where it can reach GitHub or GitLab. It connects to sast; sast never connects to it.",
     "name": "Name",
@@ -240,19 +244,19 @@
     },
     "noJobs": "No scan jobs yet",
     "noJobsDetail": "Each default branch is queued once its account is connected.",
-    "connectDescription": "The token is checked with GitHub, kept sealed, and never shown again. A fine-grained token with read access to Contents and Metadata of the account's repositories, and read and write access to Pull requests and Commit statuses, is enough.",
-    "accountHint": "The organization or user, such as acme.",
-    "token": "Token",
-    "cancel": "Cancel",
-    "connect": "Connect",
     "startAgent": "Start {{name}}",
     "startAgentDescription": "Run this where the agent can reach sast and the forge. The token works once, for 7 days, and is not shown again.",
     "done": "Done",
     "forge": "Forge",
-    "gitlabAddress": "GitLab address",
-    "gitlabAddressHint": "Your own GitLab, https only. Empty for GitLab.com or the install's SAST_GITLAB_URL.",
-    "accountHintGitlab": "The group or user by its path, such as acme or acme/platform. Subgroups come with a group.",
-    "connectDescriptionGitlab": "The token is checked with GitLab, kept sealed, and never shown again. A group or personal access token with the api scope, for a Developer or more, is enough: GitLab has no smaller scope that may post a commit status."
+    "fromFile": "From file",
+    "notInFile": "Not in the file",
+    "noFileTitle": "No repositories file",
+    "noFileDetail": "Set OPENASY_REPOSITORIES to a YAML file of forge accounts, and give sast their tokens in secrets/sast.env. The file is the only way to connect an account.",
+    "fileNotApplied": "The repositories file is not applied",
+    "fileNotAppliedDetail": "{{error}} The accounts from its last good version stay until it is fixed ({{path}}).",
+    "fileWarnings": "The repositories file is applied, with things to fix",
+    "moveToFile": "Move these to the file",
+    "moveToFileDetail": "These accounts were connected in the UI before the file. Add them to it as below and put each token in secrets/sast.env; the file then takes them over, with their repositories and findings."
   },
   "rulesPage": {
     "title": "Rules",
@@ -282,5 +286,26 @@
     "repository": "Repository",
     "finding": "Finding",
     "open": "{{open}} open"
+  },
+  "overviewPage": {
+    "overview": "Overview",
+    "passedAndFailed": "30 days: {{passed}} passed, {{failed}} failed",
+    "openOverTime": "Open findings over time",
+    "openOverTimeDetail": "At the end of each of the last 30 days, by severity. Triaged findings and archived repositories are left out.",
+    "newAndFixed": "New and fixed, by week",
+    "newAndFixedDetail": "Findings first found and fixed on the default branches, in each of the last 12 weeks.",
+    "new": "New",
+    "fixed": "Fixed",
+    "topRules": "Rules with the most open findings",
+    "topRulesDetail": "A rule high on this list may be noise: triage its findings, or turn it off under Rules.",
+    "topRepositories": "Repositories with the most open findings",
+    "topRepositoriesDetail": "Open findings of each repository's default branch.",
+    "noOpenFindings": "No open findings",
+    "bySeverity": "By severity",
+    "bySeverityDetail": "Open findings now.",
+    "open": "open",
+    "checksPassed": "Checks that passed",
+    "checksPassedDetail": "Pull request checks of the last 30 days that found nothing new at or above the bar.",
+    "noChecks": "No checks in 30 days"
   }
 }

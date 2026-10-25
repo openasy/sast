@@ -33,8 +33,34 @@ SARIF and nothing else: it holds no scanner, no source code and runs no one's co
 
 ## Repositories from GitHub and GitLab
 
-Under GitHub and GitLab, an owner connects an account with a token. sast checks the token with the forge, keeps it
-sealed with `openasy-kek` and never shows it again.
+The accounts sast reads are kept in a file, like the install's servers and endpoints (ADR 0052), so they can be kept
+in git and reviewed like code. `OPENASY_REPOSITORIES` names it; there is no form for them.
+
+```yaml
+forges:
+  - name: acme
+    forge: github              # or gitlab
+    account: acme              # a GitHub organization or user, or a GitLab group or user by its path
+    token: SAST_ACME_TOKEN     # the environment variable that holds the token, in secrets/sast.env
+  - name: platform
+    forge: gitlab
+    account: acme/platform
+    url: https://gitlab.acme.com   # optional: a GitLab of your own; GitLab.com or SAST_GITLAB_URL without it
+    token: SAST_GITLAB_TOKEN
+repositories:                  # optional
+  - name: acme/legacy
+    scan: false                # listed, never scanned, and the UI cannot turn it on
+```
+
+- **The token is never in the file**, only the name of the environment variable that holds it, as DAST's logins
+  name their secrets (ADR 0052). The install keeps them in `secrets/sast.env`, which only sast loads. sast keeps each
+  token sealed with `openasy-kek` and never shows it.
+- A change to the file is applied within a minute; a new or changed token needs a restart of sast, as any environment
+  variable does. A file sast cannot read leaves the accounts from its last good version; a token that is not set is a
+  warning on the page, and its account waits for it.
+- An account removed from the file is no longer read; its repositories stay, with their findings and triage, as CI
+  repositories. Accounts connected in the UI before the file keep working, are marked as not in the file, and the
+  page shows the entries to copy into it; once the file names the same account, it takes it over.
 
 - **GitHub:** an organization or user. A fine-grained token with read access to **Contents** and **Metadata** of the
   account's repositories, and read and write access to **Pull requests** and **Commit statuses**, is enough.
@@ -66,7 +92,6 @@ sealed with `openasy-kek` and never shows it again.
 - Under Rules, admins write rule files of their own in Opengrep's format, sent to the agent with each job, and switch
   rules off by id, whichever file they come from; a finding's panel can switch its rule off too. A rule file Opengrep
   cannot read fails the next scan, and the job says why. Scans sent from CI use CI's own rules.
-- Removing a connection keeps its repositories, their findings and triage; they become CI repositories.
 
 ## Run
 
@@ -105,6 +130,7 @@ backups.
 | `SAST_SECRETS_KEY_FILE` | `/run/secrets/openasy-kek` | 32-byte key-encryption key |
 | `SAST_DB` | `/data/sast.db` | SQLite file (WAL), on the `/data` volume |
 | `SAST_RETENTION_DAYS` | `365` | Scans, and fixed findings nobody triaged, older than this are deleted |
+| `OPENASY_REPOSITORIES` | | The repositories file: forge accounts and settings of single repositories (ADR 0052) |
 | `SAST_POLL_MINUTES` | `5` | How often connected GitHub and GitLab accounts are looked at |
 | `SAST_GITHUB_API` | `https://api.github.com` | The GitHub API, such as `https://github.example.com/api/v3` for GitHub Enterprise Server |
 | `SAST_GITLAB_URL` | `https://gitlab.com` | The GitLab a connection uses when it names no address of its own |

@@ -7,6 +7,7 @@ import { log } from "./log.ts";
 import { parseProducts } from "./products.ts";
 import { createForge } from "./forge.ts";
 import { createKeyring } from "./kek.ts";
+import { readToken, watchRepositories } from "./repositories.ts";
 import { createSast } from "./sast.ts";
 
 const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
@@ -53,6 +54,25 @@ const forge = createForge({
   publicUrl,
   log,
 });
+// The forge accounts to read, from a file like the install's servers (ADR 0052); their tokens are environment variables.
+const repositoriesPath = process.env.OPENASY_REPOSITORIES?.trim() || undefined;
+const repositoriesFile = repositoriesPath
+  ? watchRepositories(repositoriesPath, (file) => forge.syncFile(file, (name) => readToken(process.env, name)), {
+      onChange: (s) => {
+        if (s.error) log("error", "repositories file not applied; the connections from its last good version stay", { path: s.path, error: s.error });
+        else {
+          log(s.warnings.length ? "warn" : "info", "repositories file applied", {
+            path: s.path,
+            forges: s.forges,
+            repositories: s.repositories,
+            warnings: s.warnings,
+          });
+          // The accounts' repositories, and their first scans, without waiting for the next look.
+          void forge.poll();
+        }
+      },
+    })
+  : undefined;
 const products = parseProducts(process.env.OPENASY_PRODUCTS);
 if (products.invalid.length) log("warn", "OPENASY_PRODUCTS: left out entries that are not id=https://address", { entries: products.invalid });
 const server = createServer(
@@ -68,6 +88,7 @@ const server = createServer(
     openapi,
     serveMetrics: metricsPort === undefined,
     products: products.products,
+    repositoriesFile: repositoriesFile && (() => repositoriesFile.state),
   }),
 );
 const metricsServer = metricsPort !== undefined ? createServer(createMetricsHandler(sast, version)) : undefined;
@@ -97,6 +118,7 @@ void forge.poll();
 function shutdown(signal: string) {
   log("info", "shutting down", { signal });
   for (const t of timers) clearInterval(t);
+  repositoriesFile?.stop();
   metricsServer?.close();
   server.close(() => {
     db.close();

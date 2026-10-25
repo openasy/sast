@@ -197,6 +197,9 @@ describe("responses match openapi.json", () => {
     await call("PUT", "/api/v1/repositories/{id}/findings/{fingerprint}", { method: "PUT" }, `/api/v1/repositories/${repo}/findings/${fingerprint}`);
     await call("GET", "/api/v1/summary", admin());
     await call("GET", "/api/v1/summary", {});
+    await call("GET", "/api/v1/overview", admin());
+    await call("GET", "/api/v1/overview", {});
+    await call("GET", "/api/v1/findings", admin(), "/api/v1/findings?rule=js.eval");
   });
 
   it("deletes a repository", async () => {
@@ -206,12 +209,17 @@ describe("responses match openapi.json", () => {
   });
 
   it("connections, scan jobs and the agent", async () => {
-    const connection = (await call("POST", "/api/v1/connections", admin({ account: "acme", token: "github_pat_0123456789abcdefghijkl" }))).body as {
-      id: string;
-    };
-    await call("POST", "/api/v1/connections", admin({ account: "acme", token: "github_pat_0123456789abcdefghijkl" }));
-    await call("POST", "/api/v1/connections", admin({ account: "", token: "x" }));
-    await call("POST", "/api/v1/connections", admin("nope"));
+    // One made in the UI before the repositories file, and one from it.
+    app.db
+      .prepare(
+        "INSERT INTO forge_connections (id, kind, account, api_url, token, created_at) VALUES ('old', 'github', 'old', 'https://api.github.com', 'v1.x.y', ?)",
+      )
+      .run(new Date().toISOString());
+    app.forge.syncFile(
+      { forges: [{ name: "acme", forge: "github", account: "acme", url: null, token: "SAST_ACME_TOKEN" }], repositories: [{ name: "acme/web", scan: false }] },
+      () => "github_pat_0123456789abcdefghijkl",
+    );
+    const connection = { id: "old" };
     await call("GET", "/api/v1/connections", admin());
     await call("POST", "/api/v1/connections/sync", admin());
     await call("GET", "/api/v1/jobs", admin());

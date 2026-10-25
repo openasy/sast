@@ -11,11 +11,24 @@ export interface ProductLink {
 }
 
 export interface Summary {
+  /** Not archived. */
   repositories: number;
+  /** Archived on their forge, or gone from it. */
+  archived: number;
   open: Counts;
   suppressed: number;
   failingChecks: number;
   lastScanAt: string | null;
+}
+
+/** The overview page: open findings over time, new and fixed by week, the noisiest rules and repositories, checks. */
+export interface Overview {
+  open: Counts;
+  days: Array<{ day: string; open: Counts }>;
+  weeks: Array<{ week: string; new: number; fixed: number }>;
+  topRules: Array<{ rule: string; open: number; severity: Severity }>;
+  topRepositories: Array<{ id: string; name: string; open: number }>;
+  checks: { days7: { passed: number; failed: number }; days30: { passed: number; failed: number } };
 }
 
 export interface Repository {
@@ -30,6 +43,10 @@ export interface Repository {
   /** github: from a connection, scanned by sast-agent; ci: sent from CI. */
   source: "github" | "gitlab" | "ci";
   scanEnabled: boolean;
+  /** Archived on its forge, or gone from the account: not scanned, its findings not counted as open. */
+  archivedAt: string | null;
+  /** The repositories file says whether it is scanned. */
+  scanFromFile: boolean;
   headCommit: string | null;
   scannedCommit: string | null;
 }
@@ -55,10 +72,24 @@ export interface Connection {
   kind: "github" | "gitlab";
   account: string;
   apiUrl: string;
+  /** file: from the repositories file (OPENASY_REPOSITORIES); ui: made in the UI before it. */
+  source: "ui" | "file";
+  fileName: string | null;
+  /** The environment variable its token is read from; never the token. */
+  tokenVar: string | null;
   createdAt: string;
   syncedAt: string | null;
   error: string | null;
   repositories: number;
+}
+
+export interface RepositoriesFile {
+  path: string;
+  appliedAt: string | null;
+  forges: number;
+  repositories: number;
+  error: string | null;
+  warnings: string[];
 }
 
 export interface Agent {

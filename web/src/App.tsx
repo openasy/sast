@@ -1,6 +1,7 @@
 import {
   AppShell,
   Badge,
+  BarList,
   BrandProvider,
   Button,
   Callout,
@@ -9,6 +10,7 @@ import {
   EmptyState,
   FacetFilter,
   FilterBar,
+  FilterChip,
   IconButton,
   KpiCard,
   KpiGrid,
@@ -17,33 +19,62 @@ import {
   Panel,
   PRODUCT_IDS,
   SearchInput,
-  SegmentedControl,
   SelectField,
+  SEVERITY_META,
   SeverityBadge,
+  StackedBarChart,
   StatusBadge,
   Switch,
   Tabs,
   TextField,
   TimeSeriesChart,
+  TONE_COLORS,
   usePath,
-  type Column,
-  type ProductId,
   useThemePreference,
   useAgo,
   toLocale,
   useLocalePreference,
+  DonutChart,
+  Gauge,
+  OverviewGrid,
+  type Column,
+  type ProductId,
 } from "@openasy/ui";
 import { AccountSettings, AuthGate, MembersSettings, SignInSettings, TokensSettings, useAccountMenu, useAuth, useInstallBrand } from "@openasy/auth/react";
 import colophon from "virtual:openasy-colophon";
-import { Bug, CircleSlash, FolderGit2, GitBranch, KeyRound, LogIn, LogOut, Play, Plus, RefreshCw, ScrollText, Trash2, UserRound, Users, X } from "lucide-react";
+import {
+  Bug,
+  CircleAlert,
+  CircleSlash,
+  CircleX,
+  FolderGit2,
+  GitBranch,
+  Info,
+  KeyRound,
+  LayoutDashboard,
+  LogIn,
+  LogOut,
+  Play,
+  Plus,
+  RefreshCw,
+  ScrollText,
+  ShieldAlert,
+  Trash2,
+  TriangleAlert,
+  UserRound,
+  Users,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import {
   api,
   MfaSetupRequired,
   type Agent,
   type Connection,
+  type RepositoriesFile,
   type Job,
   type OwnRule,
+  type Overview,
   type RuleList,
   Unauthorized,
   type FailOn,
@@ -58,16 +89,16 @@ import {
 import { useT, type T } from "./i18n.ts";
 import { search } from "./search.ts";
 
-const PAGES = ["repositories", "github", "rules", "setup", "account", "members", "signin", "tokens", "about"] as const;
-type Route = { page: "findings" | (typeof PAGES)[number] } | { page: "repository" | "scan"; id: string };
+const PAGES = ["findings", "repositories", "github", "rules", "setup", "account", "members", "signin", "tokens", "about"] as const;
+type Route = { page: "overview" | (typeof PAGES)[number] } | { page: "repository" | "scan"; id: string };
 /** The first path segments that are pages of this UI, for followLinks. */
-export const PATHS = ["findings", "repositories", "scans", ...PAGES];
+export const PATHS = ["overview", "repositories", "scans", ...PAGES];
 function parseRoute(path: string): Route {
   const [page, id] = path.replace(/^\//, "").split("/");
   if (page === "repositories" && id) return { page: "repository", id: decodeURIComponent(id) };
   if (page === "scans" && id) return { page: "scan", id: decodeURIComponent(id) };
   if ((PAGES as readonly string[]).includes(page ?? "")) return { page: page as (typeof PAGES)[number] };
-  return { page: "findings" };
+  return { page: "overview" };
 }
 
 /** Data loading with the session; when it ends, the sign-in screen comes back. */
@@ -284,6 +315,8 @@ function FindingsTable({ call, repoId, summary, reload }: { call: Call; repoId?:
   const [tab, setTab] = useState<Tab>("open");
   const [sev, setSev] = useState<string[]>([]);
   const [q, setQ] = useState("");
+  // One rule, as the overview links to it: /findings?rule=...
+  const [rule, setRule] = useState(() => (repoId ? undefined : (new URLSearchParams(location.search).get("rule") ?? undefined)));
   const [rows, setRows] = useState<Finding[]>();
   const [more, setMore] = useState<string>();
   const [open, setOpen] = useState<Finding | null>(null);
@@ -294,10 +327,11 @@ function FindingsTable({ call, repoId, summary, reload }: { call: Call; repoId?:
       const p = new URLSearchParams({ status: tab, limit: "200" });
       if (sev.length) p.set("severity", sev.join(","));
       if (q.trim()) p.set("q", q.trim());
+      if (rule) p.set("rule", rule);
       if (cursor) p.set("cursor", cursor);
       return call<{ findings: Finding[]; nextCursor?: string }>(`${base}?${p}`);
     },
-    [call, base, tab, sev, q],
+    [call, base, tab, sev, q, rule],
   );
   const load = useCallback(() => {
     query().then(
@@ -307,6 +341,10 @@ function FindingsTable({ call, repoId, summary, reload }: { call: Call; repoId?:
   }, [query]);
   useEffect(load, [load]);
   const loadMore = () => more && query(more).then((r) => (setRows((x) => [...(x ?? []), ...r.findings]), setMore(r.nextCursor)));
+  const clearRule = () => {
+    setRule(undefined);
+    if (location.search) navigate(location.pathname, { replace: true });
+  };
 
   const columns: Column<Finding>[] = [
     { id: "sev", header: t("findingsTable.severity"), width: "104px", cell: (f) => <SeverityBadge severity={f.severity} /> },
@@ -365,7 +403,8 @@ function FindingsTable({ call, repoId, summary, reload }: { call: Call; repoId?:
           { value: "resolved", label: t("findingsTable.fixed") },
         ]}
       />
-      <FilterBar onClear={() => (setSev([]), setQ(""))}>
+      <FilterBar onClear={() => (setSev([]), setQ(""), clearRule())}>
+        {rule && <FilterChip field={t("findingsTable.rule")} value={rule} onRemove={clearRule} />}
         <FacetFilter
           label={t("findingsTable.severity")}
           selected={sev}
@@ -460,6 +499,150 @@ function FindingsPage({ call, summary, reload }: { call: Call; summary?: Summary
   );
 }
 
+/** Where the findings are going: open ones over time, new and fixed by week, the noisiest rules and repositories. */
+const SEVERITY_ICON = { critical: ShieldAlert, high: TriangleAlert, medium: CircleAlert, low: Info } as const;
+
+function OverviewPage({ call, summary }: { call: Call; summary?: Summary }) {
+  const ago = useAgo();
+  const t = useT();
+  const [o, setO] = useState<Overview>();
+  useEffect(() => void call<Overview>("/api/v1/overview").then(setO, () => {}), [call, summary]);
+  const day = (d: string) => new Date(`${d}T00:00:00Z`).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+  const color = (s: Severity) => TONE_COLORS[SEVERITY_META[s].tone];
+  const checks = (n: { passed: number; failed: number }) => t("overviewPage.passedAndFailed", { passed: n.passed, failed: n.failed });
+  return (
+    <>
+      <PageHeader
+        title={t("overviewPage.overview")}
+        description={
+          summary ? t("findingsPage.lastScan", { plural: t("plurals.repository", { count: summary.repositories }), ago: ago(summary.lastScanAt) }) : undefined
+        }
+      />
+      {o && (
+        <KpiGrid minWidth={150}>
+          {SEVERITIES.map((s) => (
+            <KpiCard
+              key={s}
+              label={t(`findingsPage.${s}`)}
+              value={o.open[s]}
+              icon={SEVERITY_ICON[s]}
+              tone={o.open[s] && (s === "critical" || s === "high") ? SEVERITY_META[s].tone : undefined}
+              trend={o.days.map((d) => d.open[s])}
+              trendColor={color(s)}
+              href="/findings"
+            />
+          ))}
+          <KpiCard
+            label={t("findingsPage.failedChecks7Days")}
+            value={o.checks.days7.failed}
+            icon={CircleX}
+            tone={o.checks.days7.failed ? "warning" : "success"}
+            footer={<span className="text-xs text-fg-muted">{checks(o.checks.days30)}</span>}
+          />
+        </KpiGrid>
+      )}
+      {o && (
+        <OverviewGrid>
+          <Panel title={t("overviewPage.openOverTime")} description={t("overviewPage.openOverTimeDetail")}>
+            <StackedBarChart
+              label={t("overviewPage.openOverTime")}
+              categories={o.days.map((d) => day(d.day))}
+              segments={(["low", "medium", "high", "critical"] as const).map((s) => ({ id: s, name: SEVERITY_META[s].label, color: color(s) }))}
+              values={o.days.map((d) => [d.open.low, d.open.medium, d.open.high, d.open.critical])}
+              height={190}
+              xTicks={6}
+            />
+          </Panel>
+          <Panel title={t("overviewPage.bySeverity")} description={t("overviewPage.bySeverityDetail")}>
+            <DonutChart
+              label={t("overviewPage.bySeverity")}
+              caption={t("overviewPage.open")}
+              slices={(["critical", "high", "medium", "low"] as const).map((s) => ({
+                id: s,
+                name: SEVERITY_META[s].label,
+                value: o.open[s],
+                color: color(s),
+                href: "/findings",
+              }))}
+            />
+          </Panel>
+        </OverviewGrid>
+      )}
+      {o && (
+        <OverviewGrid>
+          <Panel title={t("overviewPage.newAndFixed")} description={t("overviewPage.newAndFixedDetail")}>
+            <TimeSeriesChart
+              label={t("overviewPage.newAndFixed")}
+              labels={o.weeks.map((w) => day(w.week))}
+              height={190}
+              xTicks={6}
+              series={[
+                { id: "new", name: t("overviewPage.new"), data: o.weeks.map((w) => w.new), color: TONE_COLORS.danger },
+                { id: "fixed", name: t("overviewPage.fixed"), data: o.weeks.map((w) => w.fixed), color: TONE_COLORS.success },
+              ]}
+            />
+          </Panel>
+          <Panel title={t("overviewPage.checksPassed")} description={t("overviewPage.checksPassedDetail")}>
+            {o.checks.days30.passed + o.checks.days30.failed ? (
+              <Gauge
+                label={t("overviewPage.checksPassed")}
+                value={o.checks.days30.passed}
+                max={o.checks.days30.passed + o.checks.days30.failed}
+                tone={
+                  o.checks.days30.failed === 0
+                    ? "success"
+                    : o.checks.days30.passed / (o.checks.days30.passed + o.checks.days30.failed) >= 0.8
+                      ? "warning"
+                      : "danger"
+                }
+                caption={checks(o.checks.days30)}
+              />
+            ) : (
+              <EmptyState title={t("overviewPage.noChecks")} />
+            )}
+          </Panel>
+        </OverviewGrid>
+      )}
+      {o && (
+        <div className="grid gap-3 lg:grid-cols-2">
+          <Panel title={t("overviewPage.topRules")} description={t("overviewPage.topRulesDetail")}>
+            {o.topRules.length ? (
+              <BarList
+                label={t("overviewPage.topRules")}
+                items={o.topRules.map((r) => ({
+                  id: r.rule,
+                  // The rule's own name; the language and the source are in its id, shown on hover.
+                  label: <span title={r.rule}>{r.rule.split(".").at(-1)}</span>,
+                  value: r.open,
+                  href: `/findings?rule=${encodeURIComponent(r.rule)}`,
+                  color: color(r.severity),
+                }))}
+              />
+            ) : (
+              <EmptyState title={t("overviewPage.noOpenFindings")} />
+            )}
+          </Panel>
+          <Panel title={t("overviewPage.topRepositories")} description={t("overviewPage.topRepositoriesDetail")}>
+            {o.topRepositories.length ? (
+              <BarList
+                label={t("overviewPage.topRepositories")}
+                items={o.topRepositories.map((r) => ({
+                  id: r.id,
+                  label: <span title={r.name}>{r.name.split("/").at(-1)}</span>,
+                  value: r.open,
+                  href: `/repositories/${r.id}`,
+                }))}
+              />
+            ) : (
+              <EmptyState title={t("overviewPage.noOpenFindings")} />
+            )}
+          </Panel>
+        </div>
+      )}
+    </>
+  );
+}
+
 function ScanStatus({ s }: { s: Pick<Scan, "passed" | "kind"> }) {
   const t = useT();
   return s.passed ? <StatusBadge tone="success">{t("scanStatus.passed")}</StatusBadge> : <StatusBadge tone="danger">{t("scanStatus.failed")}</StatusBadge>;
@@ -494,7 +677,9 @@ function RepositoriesPage({ call }: { call: Call }) {
       id: "source",
       header: t("repositoriesPage.source"),
       cell: (r) =>
-        r.source !== "ci" ? (
+        r.archivedAt ? (
+          <Badge>{t("repositoriesPage.archived")}</Badge>
+        ) : r.source !== "ci" ? (
           <Badge tone={r.scanEnabled ? "info" : "neutral"}>
             {r.scanEnabled ? FORGE_NAME[r.source] : t("repositoriesPage.forgeOff", { forge: FORGE_NAME[r.source] })}
           </Badge>
@@ -640,20 +825,27 @@ function RepositoryPage({ call, id, reload }: { call: Call; id: string; reload: 
             : undefined
         }
       />
-      {repo && repo.source !== "ci" && (
+      {repo?.archivedAt && (
+        <Callout tone="info" title={t("repositoryPage.archivedTitle", { ago: ago(repo.archivedAt) })}>
+          {t("repositoryPage.archivedDetail")}
+        </Callout>
+      )}
+      {repo && repo.source !== "ci" && !repo.archivedAt && (
         <Panel title={t("repositoryPage.scanning")} description={t("repositoryPage.scanningDescription", { forge: FORGE_NAME[repo.source] })}>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <Switch
               checked={repo.scanEnabled}
               onCheckedChange={(on) => void setScanning(on)}
-              disabled={!can("editor")}
+              disabled={!can("editor") || repo.scanFromFile}
               label={t("repositoryPage.scanThisRepository")}
               description={
-                repo.scannedCommit
-                  ? repo.scannedCommit === repo.headCommit
-                    ? t("repositoryPage.headScanned", { commit: repo.scannedCommit.slice(0, 8) })
-                    : t("repositoryPage.headNotScanned", { commit: (repo.headCommit ?? "").slice(0, 8) })
-                  : t("repositoryPage.notScannedYet")
+                repo.scanFromFile
+                  ? t("repositoryPage.setInTheFile")
+                  : repo.scannedCommit
+                    ? repo.scannedCommit === repo.headCommit
+                      ? t("repositoryPage.headScanned", { commit: repo.scannedCommit.slice(0, 8) })
+                      : t("repositoryPage.headNotScanned", { commit: (repo.headCommit ?? "").slice(0, 8) })
+                    : t("repositoryPage.notScannedYet")
               }
             />
             {can("editor") && (
@@ -1013,6 +1205,29 @@ const JOB_TONE = { queued: "neutral", running: "info", done: "success", failed: 
 const FORGE_NAME = { github: "GitHub", gitlab: "GitLab" } as const;
 const AGENT_TONE = { "waiting-to-enrol": "warning", online: "success", offline: "danger" } as const;
 
+// What to write in the repositories file (ADR 0052), shown where there is nothing yet. The token goes in secrets/sast.env.
+const REPOSITORIES_EXAMPLE = `forges:
+  - name: acme
+    forge: github            # or gitlab
+    account: acme            # a GitHub organization or user, or a GitLab group path
+    token: SAST_ACME_TOKEN   # its value goes in secrets/sast.env
+repositories:                # optional
+  - name: acme/legacy
+    scan: false`;
+
+/** The file entries for connections made in the UI, to copy into the file; their tokens go in secrets/sast.env. */
+function yamlFor(list: Connection[]) {
+  const lines = ["forges:"];
+  for (const c of list) {
+    const host = new URL(c.apiUrl);
+    const name = c.account.replace(/[^A-Za-z0-9._-]/g, "-");
+    lines.push(`  - name: ${name}`, `    forge: ${c.kind}`, `    account: ${c.account}`);
+    if (c.kind === "gitlab" && host.host !== "gitlab.com") lines.push(`    url: ${host.origin}`);
+    lines.push(`    token: SAST_${name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_TOKEN`);
+  }
+  return lines.join("\n");
+}
+
 /** GitHub and GitLab accounts sast follows, the agents that scan them, extra rule sources and the scan queue (ADR 0036). */
 function GithubPage({ call, reload }: { call: Call; reload: () => void }) {
   const ago = useAgo();
@@ -1024,20 +1239,15 @@ function GithubPage({ call, reload }: { call: Call; reload: () => void }) {
   const [sources, setSources] = useState<string[]>([]);
   const [newSource, setNewSource] = useState("");
   const [sourceError, setSourceError] = useState<string>();
-  const [adding, setAdding] = useState(false);
-  const [kind, setKind] = useState<Connection["kind"]>("github");
-  const [gitlabUrl, setGitlabUrl] = useState("");
-  const [account, setAccount] = useState("");
-  const [token, setToken] = useState("");
-  const [connectError, setConnectError] = useState<string>();
+  const [file, setFile] = useState<RepositoriesFile | null>();
   const [agentName, setAgentName] = useState("");
   const [agentError, setAgentError] = useState<string>();
   const [enrolment, setEnrolment] = useState<{ name: string; token: string }>();
   const [syncing, setSyncing] = useState(false);
 
   const load = useCallback(() => {
-    call<{ connections: Connection[] }>("/api/v1/connections").then(
-      (r) => setConnections(r.connections),
+    call<{ connections: Connection[]; repositoriesFile: RepositoriesFile | null }>("/api/v1/connections").then(
+      (r) => (setConnections(r.connections), setFile(r.repositoriesFile)),
       () => setConnections([]),
     );
     call<{ agents: Agent[] }>("/api/v1/agents").then(
@@ -1059,19 +1269,6 @@ function GithubPage({ call, reload }: { call: Call; reload: () => void }) {
     return () => clearInterval(timer);
   }, [load]);
 
-  const closeConnect = () => (setAdding(false), setKind("github"), setGitlabUrl(""), setAccount(""), setToken(""), setConnectError(undefined));
-  const connect = async (e: FormEvent) => {
-    e.preventDefault();
-    try {
-      const url = kind === "gitlab" && gitlabUrl.trim() ? { url: gitlabUrl.trim() } : {};
-      await call("/api/v1/connections", { method: "POST", body: JSON.stringify({ kind, account: account.trim(), token, ...url }) });
-      closeConnect();
-      load();
-      reload();
-    } catch (err) {
-      setConnectError((err as Error).message);
-    }
-  };
   const disconnect = (c: Connection) => call(`/api/v1/connections/${c.id}`, { method: "DELETE" }).then(load, () => {});
   const sync = () => {
     setSyncing(true);
@@ -1107,7 +1304,16 @@ function GithubPage({ call, reload }: { call: Call; reload: () => void }) {
   };
 
   const connectionColumns: Column<Connection>[] = [
-    { id: "account", header: t("githubPage.account"), cell: (c) => <span className="font-medium">{c.account}</span> },
+    {
+      id: "account",
+      header: t("githubPage.account"),
+      cell: (c) => (
+        <span className="flex flex-wrap items-center gap-1.5">
+          <span className="font-medium">{c.account}</span>
+          {c.source === "file" ? <Badge tone="neutral">{t("githubPage.fromFile")}</Badge> : <Badge tone="warning">{t("githubPage.notInFile")}</Badge>}
+        </span>
+      ),
+    },
     {
       id: "forge",
       header: t("githubPage.forge"),
@@ -1131,11 +1337,13 @@ function GithubPage({ call, reload }: { call: Call; reload: () => void }) {
             id: "remove",
             header: <span className="sr-only">{t("githubPage.actions")}</span>,
             width: "56px",
-            cell: (c: Connection) => (
-              <IconButton label={t("githubPage.disconnect", { account: c.account })} size="sm" onClick={() => void disconnect(c)}>
-                <Trash2 />
-              </IconButton>
-            ),
+            // One from the file goes with its entry there.
+            cell: (c: Connection) =>
+              c.source === "ui" && (
+                <IconButton label={t("githubPage.disconnect", { account: c.account })} size="sm" onClick={() => void disconnect(c)}>
+                  <Trash2 />
+                </IconButton>
+              ),
           } satisfies Column<Connection>,
         ]
       : []),
@@ -1206,11 +1414,6 @@ function GithubPage({ call, reload }: { call: Call; reload: () => void }) {
             <Button icon={<RefreshCw />} onClick={sync} disabled={syncing || !connections?.length}>
               {t("githubPage.lookNow")}
             </Button>
-            {can("owner") && (
-              <Button variant="primary" icon={<Plus />} onClick={() => setAdding(true)}>
-                {t("githubPage.connectAccount")}
-              </Button>
-            )}
           </>
         }
       />
@@ -1219,7 +1422,26 @@ function GithubPage({ call, reload }: { call: Call; reload: () => void }) {
           {t("githubPage.noAgentOnlineDetail")}
         </Callout>
       )}
-      <Panel title={t("githubPage.accounts")} description={t("githubPage.accountsDescription")} flush>
+      {file === null && (
+        <Callout tone="info" title={t("githubPage.noFileTitle")}>
+          {t("githubPage.noFileDetail")}
+        </Callout>
+      )}
+      {file?.error && (
+        <Callout tone="danger" title={t("githubPage.fileNotApplied")}>
+          {t("githubPage.fileNotAppliedDetail", { error: file.error, path: file.path })}
+        </Callout>
+      )}
+      {!!file?.warnings.length && (
+        <Callout tone="warning" title={t("githubPage.fileWarnings")}>
+          <ul className="m-0 flex list-none flex-col gap-0.5 p-0 text-xs">
+            {file.warnings.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+        </Callout>
+      )}
+      <Panel title={t("githubPage.accounts")} description={t("githubPage.accountsDescription", { path: file?.path ?? "OPENASY_REPOSITORIES" })} flush>
         <DataTable
           label={t("githubPage.accounts")}
           columns={connectionColumns}
@@ -1227,9 +1449,21 @@ function GithubPage({ call, reload }: { call: Call; reload: () => void }) {
           loading={!connections}
           getRowId={(c) => c.id}
           minWidth={560}
-          empty={<EmptyState title={t("githubPage.noAccounts")}>{t("githubPage.noAccountsDetail")}</EmptyState>}
+          empty={
+            <EmptyState title={t("githubPage.noAccounts")}>
+              <span className="flex flex-col gap-2 text-left">
+                {t("githubPage.noAccountsDetail")}
+                <Code>{REPOSITORIES_EXAMPLE}</Code>
+              </span>
+            </EmptyState>
+          }
         />
       </Panel>
+      {!!connections?.some((c) => c.source === "ui") && (
+        <Panel title={t("githubPage.moveToFile")} description={t("githubPage.moveToFileDetail")}>
+          <Code>{yamlFor(connections.filter((c) => c.source === "ui"))}</Code>
+        </Panel>
+      )}
       <Panel title={t("githubPage.agents")} description={t("githubPage.agentsDescription")} flush>
         <DataTable
           label={t("githubPage.agents")}
@@ -1301,59 +1535,6 @@ function GithubPage({ call, reload }: { call: Call; reload: () => void }) {
         />
       </Panel>
 
-      <Dialog
-        open={adding}
-        onOpenChange={(open) => !open && closeConnect()}
-        title={t("githubPage.connectAccount")}
-        description={kind === "gitlab" ? t("githubPage.connectDescriptionGitlab") : t("githubPage.connectDescription")}
-        onSubmit={connect}
-        footer={
-          <>
-            <Button type="button" onClick={closeConnect}>
-              {t("githubPage.cancel")}
-            </Button>
-            <Button type="submit" variant="primary" disabled={!account.trim() || token.trim().length < 20}>
-              {t("githubPage.connect")}
-            </Button>
-          </>
-        }
-      >
-        <SegmentedControl
-          label={t("githubPage.forge")}
-          value={kind}
-          onChange={setKind}
-          options={[
-            { value: "github", label: FORGE_NAME.github },
-            { value: "gitlab", label: FORGE_NAME.gitlab },
-          ]}
-        />
-        {kind === "gitlab" && (
-          <TextField
-            label={t("githubPage.gitlabAddress")}
-            value={gitlabUrl}
-            onChange={(e) => setGitlabUrl(e.target.value)}
-            placeholder="https://gitlab.example.com"
-            hint={t("githubPage.gitlabAddressHint")}
-            mono
-          />
-        )}
-        <TextField
-          label={t("githubPage.account")}
-          value={account}
-          onChange={(e) => setAccount(e.target.value)}
-          hint={kind === "gitlab" ? t("githubPage.accountHintGitlab") : t("githubPage.accountHint")}
-        />
-        <TextField
-          label={t("githubPage.token")}
-          type="password"
-          autoComplete="off"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          hint={kind === "gitlab" ? "glpat-..." : "github_pat_..."}
-          error={connectError}
-          mono
-        />
-      </Dialog>
       <Dialog
         open={!!enrolment}
         onOpenChange={(open) => !open && setEnrolment(undefined)}
@@ -1482,6 +1663,7 @@ function Product() {
   }, [reload]);
 
   const nav = [
+    { id: "overview", label: msg("product.overview"), icon: LayoutDashboard },
     { id: "findings", label: msg("product.findings"), icon: Bug },
     { id: "repositories", label: msg("product.repositories"), icon: FolderGit2, count: summary?.repositories },
   ];
@@ -1520,8 +1702,10 @@ function Product() {
       onThemeChange={setTheme}
       onLanguageChange={(code) => setLocale(toLocale(code))}
     >
-      {route.page === "findings" && summary && summary.repositories === 0 ? (
+      {(route.page === "overview" || route.page === "findings") && summary && summary.repositories === 0 && summary.archived === 0 ? (
         <WelcomePage />
+      ) : route.page === "overview" ? (
+        <OverviewPage call={call} summary={summary} />
       ) : route.page === "findings" ? (
         <FindingsPage call={call} summary={summary} reload={reload} />
       ) : route.page === "repositories" ? (

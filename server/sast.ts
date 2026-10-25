@@ -32,6 +32,9 @@ const MAX_ACCEPT_DAYS = 366;
 const SCAN_FINDINGS_IN_ANSWER = 100;
 
 const now = () => new Date().toISOString();
+const DAY = 86_400_000;
+/** Findings of a repository archived on its forge, or gone from it, are no longer open: the code is not worked on. */
+const ACTIVE = "repo_id NOT IN (SELECT id FROM repositories WHERE archived_at IS NOT NULL)";
 const bad = (detail: string) => new SastError(422, "invalid-body", detail);
 const notFound = (what: string) => new SastError(404, "not-found", `${what} does not exist.`);
 
@@ -67,6 +70,8 @@ export interface FindingFilter {
   status: Status;
   severity?: Severity[];
   q?: string;
+  /** One rule, by its id. */
+  rule?: string;
   repoId?: string;
 }
 
@@ -109,7 +114,7 @@ export function createSast(db: DatabaseSync, { retentionDays = 365 }: SastOption
     const c = zero();
     const rows = db
       .prepare(
-        `SELECT severity, COUNT(*) AS n FROM findings WHERE resolved_at IS NULL AND NOT ${SUPPRESSED} ${repoId ? "AND repo_id = ?" : ""} GROUP BY severity`,
+        `SELECT severity, COUNT(*) AS n FROM findings WHERE resolved_at IS NULL AND NOT ${SUPPRESSED} AND ${repoId ? "repo_id = ?" : ACTIVE} GROUP BY severity`,
       )
       .all(...([now(), ...(repoId ? [repoId] : [])] as SQLInputValue[])) as Array<{ severity: Severity; n: number }>;
     for (const r of rows) c[r.severity] = r.n;
@@ -133,6 +138,10 @@ export function createSast(db: DatabaseSync, { retentionDays = 365 }: SastOption
         (db.prepare("SELECT kind FROM forge_connections WHERE id = ?").get(r.connection_id) as { kind: string } | undefined)?.kind) ||
         "ci") as "github" | "gitlab" | "ci",
       scanEnabled: r.scan_enabled !== 0,
+      // Archived on its forge, or gone from the account: not scanned, and its findings are not counted as open.
+      archivedAt: (r.archived_at ?? null) as string | null,
+      // The repositories file says whether it is scanned; the UI cannot change it.
+      scanFromFile: r.scan_from_file === 1,
       headCommit: (r.head_commit ?? null) as string | null,
       scannedCommit: (r.scanned_commit ?? null) as string | null,
       open: openCounts(r.id),
@@ -182,6 +191,8 @@ export function createSast(db: DatabaseSync, { retentionDays = 365 }: SastOption
       where.push(filter.status === "suppressed" ? SUPPRESSED.replace("?", "'" + at + "'") : `NOT ${SUPPRESSED.replace("?", "'" + at + "'")}`);
     }
     if (filter.repoId) (where.push("f.repo_id = ?"), args.push(filter.repoId));
+    else where.push("r.archived_at IS NULL");
+    if (filter.rule) (where.push("f.rule_id = ?"), args.push(filter.rule));
     if (filter.severity?.length) (where.push(`f.severity IN (${filter.severity.map(() => "?").join(",")})`), args.push(...filter.severity));
     if (filter.q) {
       const like = `%${filter.q.replace(/[\\%_]/g, "\\$&")}%`;
@@ -342,21 +353,90 @@ export function createSast(db: DatabaseSync, { retentionDays = 365 }: SastOption
     },
 
     summary() {
-      const repositories = (db.prepare("SELECT COUNT(*) AS n FROM repositories").get() as { n: number }).n;
-      const suppressed = (db.prepare(`SELECT COUNT(*) AS n FROM findings WHERE resolved_at IS NULL AND ${SUPPRESSED}`).get(now()) as { n: number }).n;
+      const repositories = (db.prepare("SELECT COUNT(*) AS n FROM repositories WHERE archived_at IS NULL").get() as { n: number }).n;
+      const archived = (db.prepare("SELECT COUNT(*) AS n FROM repositories WHERE archived_at IS NOT NULL").get() as { n: number }).n;
+      const suppressed = (
+        db.prepare(`SELECT COUNT(*) AS n FROM findings WHERE resolved_at IS NULL AND ${SUPPRESSED} AND ${ACTIVE}`).get(now()) as { n: number }
+      ).n;
       const week = new Date(Date.now() - 7 * 86_400_000).toISOString();
       const failing = (db.prepare("SELECT COUNT(*) AS n FROM scans WHERE kind = 'change' AND blocking > 0 AND created_at > ?").get(week) as { n: number }).n;
       const lastScanAt = (db.prepare("SELECT MAX(created_at) AS t FROM scans").get() as { t: string | null }).t;
-      return { repositories, open: openCounts(), suppressed, failingChecks: failing, lastScanAt };
+      return { repositories, archived, open: openCounts(), suppressed, failingChecks: failing, lastScanAt };
+    },
+
+    /**
+     * The overview page: open findings at the end of each of the last 30 days (UTC), by severity, the last value being
+     * now; new and fixed findings in each of the last 12 weeks; the rules and repositories with the most open findings;
+     * and how pull request checks went. A finding's past triage is read from when it was triaged.
+     */
+    overview() {
+      const at = now();
+      const today = Math.floor(Date.parse(at) / DAY) * DAY;
+      const openAt = db.prepare(
+        `SELECT f.severity, COUNT(*) AS n FROM findings f JOIN repositories r ON r.id = f.repo_id
+         WHERE f.first_seen <= ? AND (f.resolved_at IS NULL OR f.resolved_at > ?) AND (r.archived_at IS NULL OR r.archived_at > ?)
+           AND NOT (f.triage <> 'open' AND f.triaged_at <= ? AND (f.expires_at IS NULL OR f.expires_at > ?))
+         GROUP BY f.severity`,
+      );
+      const days = Array.from({ length: 30 }, (_, i) => {
+        const start = today - (29 - i) * DAY;
+        const end = i === 29 ? at : new Date(start + DAY).toISOString();
+        const open = zero();
+        for (const r of openAt.all(end, end, end, end, end) as Array<{ severity: Severity; n: number }>) open[r.severity] = r.n;
+        return { day: new Date(start).toISOString().slice(0, 10), open };
+      });
+      // A row made only to hold triage starts resolved: it was never found on the default branch, nor fixed there.
+      const count = db.prepare(
+        `SELECT COUNT(*) AS n FROM findings WHERE first_seen >= ? AND first_seen < ? AND NOT (resolved_at IS NOT NULL AND resolved_at = first_seen)`,
+      );
+      const fixed = db.prepare("SELECT COUNT(*) AS n FROM findings WHERE resolved_at >= ? AND resolved_at < ? AND resolved_at > first_seen");
+      const weeks = Array.from({ length: 12 }, (_, i) => {
+        const start = new Date(today + DAY - (12 - i) * 7 * DAY).toISOString();
+        const end = new Date(today + DAY - (11 - i) * 7 * DAY).toISOString();
+        return {
+          week: start.slice(0, 10),
+          new: (count.get(start, end) as { n: number }).n,
+          fixed: (fixed.get(start, end) as { n: number }).n,
+        };
+      });
+      const topRules = (
+        db
+          .prepare(
+            `SELECT rule_id, COUNT(*) AS n, MAX(${RANK_SQL}) AS rank FROM findings WHERE resolved_at IS NULL AND NOT ${SUPPRESSED} AND ${ACTIVE}
+             GROUP BY rule_id ORDER BY n DESC, rule_id LIMIT 10`,
+          )
+          .all(at) as Array<{ rule_id: string; n: number; rank: number }>
+      ).map((r) => ({ rule: r.rule_id, open: r.n, severity: SEVERITIES[4 - r.rank]! }));
+      const topRepositories = (
+        db
+          .prepare(
+            `SELECT r.id, r.name, COUNT(*) AS n FROM findings f JOIN repositories r ON r.id = f.repo_id
+             WHERE f.resolved_at IS NULL AND NOT ${SUPPRESSED} AND r.archived_at IS NULL
+             GROUP BY r.id ORDER BY n DESC, r.name LIMIT 10`,
+          )
+          .all(at) as Array<{ id: string; name: string; n: number }>
+      ).map((r) => ({ id: r.id, name: r.name, open: r.n }));
+      const checks = (days: number) => {
+        const since = new Date(Date.parse(at) - days * DAY).toISOString();
+        const r = db
+          .prepare("SELECT SUM(blocking = 0) AS passed, SUM(blocking > 0) AS failed FROM scans WHERE kind = 'change' AND created_at > ?")
+          .get(since) as { passed: number | null; failed: number | null };
+        return { passed: r.passed ?? 0, failed: r.failed ?? 0 };
+      };
+      return { open: openCounts(), days, weeks, topRules, topRepositories, checks: { days7: checks(7), days30: checks(30) } };
     },
 
     severityTotals: () => openCounts(),
-    repositoryCount: () => (db.prepare("SELECT COUNT(*) AS n FROM repositories").get() as { n: number }).n,
-    suppressedCount: () => (db.prepare(`SELECT COUNT(*) AS n FROM findings WHERE resolved_at IS NULL AND ${SUPPRESSED}`).get(now()) as { n: number }).n,
+    repositoryCount: () => (db.prepare("SELECT COUNT(*) AS n FROM repositories WHERE archived_at IS NULL").get() as { n: number }).n,
+    suppressedCount: () =>
+      (db.prepare(`SELECT COUNT(*) AS n FROM findings WHERE resolved_at IS NULL AND ${SUPPRESSED} AND ${ACTIVE}`).get(now()) as { n: number }).n,
 
     listRepositories(cursor: string | undefined, limit: number): Page<ReturnType<typeof presentRepo>> {
       const offset = decodeCursor(cursor);
-      const rows = db.prepare("SELECT * FROM repositories ORDER BY name LIMIT ? OFFSET ?").all(limit + 1, offset) as Array<Record<string, any>>;
+      // Archived ones last.
+      const rows = db.prepare("SELECT * FROM repositories ORDER BY archived_at IS NOT NULL, name LIMIT ? OFFSET ?").all(limit + 1, offset) as Array<
+        Record<string, any>
+      >;
       return { items: rows.slice(0, limit).map(presentRepo), ...(rows.length > limit && { nextCursor: encodeCursor(offset + limit) }) };
     },
 
@@ -369,6 +449,8 @@ export function createSast(db: DatabaseSync, { retentionDays = 365 }: SastOption
         throw bad("Expected { defaultBranch?, failOn?, scanEnabled? }.");
       if (scanEnabled !== undefined) {
         if (typeof scanEnabled !== "boolean") throw bad("scanEnabled must be true or false.");
+        if ((db.prepare("SELECT scan_from_file FROM repositories WHERE id = ?").get(id) as { scan_from_file: number } | undefined)?.scan_from_file)
+          throw new SastError(409, "conflict", "The repositories file (OPENASY_REPOSITORIES) says whether this repository is scanned; change it there.");
         db.prepare("UPDATE repositories SET scan_enabled = ? WHERE id = ?").run(scanEnabled ? 1 : 0, id);
         if (!scanEnabled) db.prepare("DELETE FROM scan_jobs WHERE repo_id = ? AND status = 'queued'").run(id);
       }

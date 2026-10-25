@@ -1,6 +1,7 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { RepositoriesFile } from "./repositories.ts";
 import { sarif, startApp } from "./test-app.ts";
 
 const TOKEN = "github_pat_0123456789abcdefghijklmnop";
@@ -78,6 +79,14 @@ afterAll(async () => {
 });
 
 const post = (path: string, body: unknown) => app.admin(path, { method: "POST", body: JSON.stringify(body) });
+type Sync = { forge: { syncFile: (f: RepositoriesFile, token: (file: string) => string) => string[] } };
+/** Applies a repositories file to an app, with the environment as a map of variable to token. */
+const syncFile = (a: Sync, forges: RepositoriesFile["forges"], tokens: Record<string, string>, repositories: RepositoriesFile["repositories"] = []) =>
+  a.forge.syncFile({ forges, repositories }, (file) => {
+    if (!(file in tokens)) throw new Error(`${file} is not set: put it in secrets/sast.env, then restart sast.`);
+    return tokens[file]!;
+  });
+const ACME = { name: "acme", forge: "github" as const, account: "acme", url: null, token: "SAST_ACME_TOKEN" };
 const asAgent =
   (secret: string) =>
   (path: string, init: RequestInit = {}) =>
@@ -86,16 +95,21 @@ const asAgent =
 describe("repositories from GitHub, scanned by sast-agent (ADR 0036)", () => {
   let agent: ReturnType<typeof asAgent>;
 
-  it("connects an account with a token GitHub accepts, once", async () => {
-    expect((await post("/api/v1/connections", { account: "acme", token: "github_pat_wrong_wrong_wrong_wrong" })).status).toBe(422);
-    expect((await post("/api/v1/connections", { account: "-bad-", token: TOKEN })).status).toBe(422);
-    const res = await post("/api/v1/connections", { account: "acme", token: TOKEN });
-    expect(res.status).toBe(201);
-    const c = await json(res);
-    expect(c).toMatchObject({ kind: "github", account: "acme" });
-    expect(JSON.stringify(c)).not.toContain(TOKEN);
-    expect((await post("/api/v1/connections", { account: "ACME", token: TOKEN })).status).toBe(409);
-    // The token is sealed at rest.
+  it("connects the accounts the repositories file names, with their tokens from the variables it names (ADR 0052)", async () => {
+    // A token that is not set is a warning, and the entry waits for it.
+    expect(syncFile(app, [ACME], {})).toEqual(["acme: SAST_ACME_TOKEN is not set: put it in secrets/sast.env, then restart sast."]);
+    expect((await json(await app.admin("/api/v1/connections"))).connections).toEqual([]);
+    expect(syncFile(app, [ACME], { SAST_ACME_TOKEN: TOKEN })).toEqual([]);
+    const { connections } = await json(await app.admin("/api/v1/connections"));
+    expect(connections).toEqual([
+      expect.objectContaining({ kind: "github", account: "acme", source: "file", fileName: "acme", tokenVar: "SAST_ACME_TOKEN", error: null }),
+    ]);
+    expect(JSON.stringify(connections)).not.toContain(TOKEN);
+    // Applying the same file again keeps the same connection.
+    syncFile(app, [ACME], { SAST_ACME_TOKEN: TOKEN });
+    expect((await json(await app.admin("/api/v1/connections"))).connections.map((c: { id: string }) => c.id)).toEqual([connections[0].id]);
+    // There is no route that makes one, and the token is sealed at rest.
+    expect((await post("/api/v1/connections", { account: "acme", token: TOKEN })).status).toBe(404);
     expect(JSON.stringify(app.db.prepare("SELECT * FROM forge_connections").all())).not.toContain(TOKEN);
   });
 
@@ -201,12 +215,76 @@ describe("repositories from GitHub, scanned by sast-agent (ADR 0036)", () => {
     expect(jobs[0].ruleSources).toEqual(["https://github.com/acme/rules"]);
   });
 
-  it("removes a connection, and keeps its repositories with their findings", async () => {
+  it("turns off the repositories the file says, which the UI then cannot turn on", async () => {
+    syncFile(app, [ACME], { SAST_ACME_TOKEN: TOKEN }, [{ name: "acme/web", scan: false }]);
+    const repos = async () => (await json(await app.admin("/api/v1/repositories"))).repositories as Array<Record<string, any>>;
+    const web = (await repos()).find((r) => r.name === "acme/web")!;
+    expect(web).toMatchObject({ scanEnabled: false, scanFromFile: true });
+    expect((await app.admin(`/api/v1/repositories/${web.id}`, { method: "PATCH", body: JSON.stringify({ scanEnabled: true }) })).status).toBe(409);
+    // Left out of the file, it is scanned again.
+    syncFile(app, [ACME], { SAST_ACME_TOKEN: TOKEN });
+    expect((await repos()).find((r) => r.name === "acme/web")).toMatchObject({ scanEnabled: true, scanFromFile: false });
+  });
+
+  it("stops scanning a repository archived on GitHub or gone from the account, and takes its findings out of the open ones", async () => {
+    const repos = async () => (await json(await app.admin("/api/v1/repositories"))).repositories as Array<Record<string, any>>;
+    const api = (await repos()).find((r) => r.name === "acme/api")!;
+    app.db
+      .prepare(
+        "INSERT INTO findings (repo_id, fingerprint, rule_id, severity, path, message, first_seen, last_seen) VALUES (?, 'fp-api', 'js.sql', 'high', 'a.js', 'm', ?, ?)",
+      )
+      .run(api.id, "2026-10-01T00:00:00Z", "2026-10-01T00:00:00Z");
+    const open = async () => (await json(await app.admin("/api/v1/findings?rule=js.sql"))).findings as unknown[];
+    expect(await open()).toHaveLength(1);
+    const before = (await json(await app.admin("/api/v1/summary"))) as { repositories: number; open: { high: number } };
+
+    gh.repos[3]!.archived = true;
+    await app.forge.poll();
+    expect((await repos()).find((r) => r.name === "acme/api")!.archivedAt).toEqual(expect.any(String));
+    // Archived ones come last, and their findings leave the open ones without being called fixed.
+    expect((await repos()).at(-1)!.name).toBe("acme/api");
+    expect(await open()).toEqual([]);
+    const after = (await json(await app.admin("/api/v1/summary"))) as typeof before & { archived: number };
+    expect(after).toMatchObject({ repositories: before.repositories - 1, archived: 1, open: { high: before.open.high - 1 } });
+    expect((await json(await app.admin(`/api/v1/repositories/${api.id}/findings`))).findings).toHaveLength(1);
+    expect((await app.admin(`/api/v1/repositories/${api.id}/scan`, { method: "POST" })).status).toBe(409);
+
+    // Active again on GitHub, it is scanned again, with its findings.
+    gh.repos[3]!.archived = false;
+    await app.forge.poll();
+    expect((await repos()).find((r) => r.name === "acme/api")!.archivedAt).toBeNull();
+    expect(await open()).toHaveLength(1);
+
+    // Gone from the account, deleted or out of the token's reach, it is archived the same way.
+    const [gone] = gh.repos.splice(3, 1);
+    await app.forge.poll();
+    expect((await repos()).find((r) => r.name === "acme/api")!.archivedAt).toEqual(expect.any(String));
+    gh.repos.splice(3, 0, gone!);
+    await app.forge.poll();
+    expect((await repos()).find((r) => r.name === "acme/api")!.archivedAt).toBeNull();
+  });
+
+  it("removes a connection with its entry in the file, and keeps its repositories with their findings", async () => {
     const [c] = (await json(await app.admin("/api/v1/connections"))).connections;
     expect(c.repositories).toBe(2);
-    expect((await app.admin(`/api/v1/connections/${c.id}`, { method: "DELETE" })).status).toBe(204);
+    // One from the file is not removed here.
+    expect((await app.admin(`/api/v1/connections/${c.id}`, { method: "DELETE" })).status).toBe(409);
+    expect(syncFile(app, [], {})).toEqual([]);
+    expect((await json(await app.admin("/api/v1/connections"))).connections).toEqual([]);
     const repos = (await json(await app.admin("/api/v1/repositories"))).repositories as Array<Record<string, any>>;
     expect(repos.map((r) => `${r.name} ${r.source}`)).toEqual(["acme/api ci", "acme/web ci"]);
+  });
+
+  it("takes over a connection made in the UI before, when the file names its account", async () => {
+    app.db
+      .prepare("INSERT INTO forge_connections (id, kind, account, api_url, token, created_at) VALUES ('old', 'github', 'acme', ?, 'v1.x.y', 'now')")
+      .run(`http://127.0.0.1:${(gh.server.address() as AddressInfo).port}`);
+    let [c] = (await json(await app.admin("/api/v1/connections"))).connections;
+    expect(c).toMatchObject({ id: "old", source: "ui", fileName: null });
+    syncFile(app, [ACME], { SAST_ACME_TOKEN: TOKEN });
+    [c] = (await json(await app.admin("/api/v1/connections"))).connections;
+    expect(c).toMatchObject({ id: "old", source: "file", fileName: "acme" });
+    syncFile(app, [], {});
   });
 });
 
@@ -265,7 +343,7 @@ describe("pull requests of a connected repository (ADR 0036)", () => {
   });
 
   it("scans an open pull request into the default branch, compares it, and posts the result as a commit status", async () => {
-    await pr.admin("/api/v1/connections", { method: "POST", body: JSON.stringify({ account: "acme", token: TOKEN }) });
+    syncFile(pr, [ACME], { SAST_ACME_TOKEN: TOKEN });
     await pr.forge.poll();
     const jobs = (await json(await pr.admin("/api/v1/jobs"))).jobs as Array<Record<string, any>>;
     // The default branch, and pull request 7; 8 goes into another branch.
@@ -402,19 +480,11 @@ describe("repositories and merge requests from GitLab (ADR 0036)", () => {
     await gl.close();
     await new Promise((r) => server.close(r));
   });
-  const connect = (body: object) => gl.admin("/api/v1/connections", { method: "POST", body: JSON.stringify({ kind: "gitlab", ...body }) });
-
-  it("connects a group by its path with a token GitLab accepts, at an https address of the install's own", async () => {
-    expect((await connect({ account: "acme/platform", token: "glpat-wrong-wrong-wrong-wrong" })).status).toBe(422);
-    expect((await connect({ account: "acme//x", token: GL })).status).toBe(422);
-    expect((await connect({ account: "acme", token: GL, url: "http://gitlab.example.com" })).status).toBe(422);
-    expect((await connect({ account: "acme", token: GL, url: "https://user:pw@gitlab.example.com" })).status).toBe(422);
-    const res = await connect({ account: "acme/platform", token: GL });
-    expect(res.status).toBe(201);
-    const c = await json(res);
-    expect(c).toMatchObject({ kind: "gitlab", account: "acme/platform", apiUrl: expect.stringMatching(/\/api\/v4$/) });
+  it("connects a group by its path from the file, at the install's GitLab", async () => {
+    syncFile(gl, [{ name: "platform", forge: "gitlab", account: "acme/platform", url: null, token: "SAST_GITLAB_TOKEN" }], { SAST_GITLAB_TOKEN: GL });
+    const [c] = (await json(await gl.admin("/api/v1/connections"))).connections;
+    expect(c).toMatchObject({ kind: "gitlab", account: "acme/platform", source: "file", apiUrl: expect.stringMatching(/\/api\/v4$/) });
     expect(JSON.stringify(c)).not.toContain(GL);
-    expect((await connect({ account: "acme/platform", token: GL })).status).toBe(409);
   });
 
   it("lists the group's projects with its subgroups', not archived or empty ones, and queues each default branch", async () => {

@@ -8,6 +8,7 @@ import { AuthError, identityOrigin, mergeOpenApi, sendProblem, type Auth, type R
 import { log } from "./log.ts";
 import { countRequest, renderMetrics } from "./metrics.ts";
 import type { ProductLink } from "./products.ts";
+import type { RepositoriesFileState } from "./repositories.ts";
 import type { Severity } from "./sarif.ts";
 import type { Forge } from "./forge.ts";
 import { parseLimit, SastError, SEVERITIES, type FindingFilter, type ProblemCode, type Sast, type Status } from "./sast.ts";
@@ -34,6 +35,8 @@ export interface AppOptions {
   serveMetrics?: boolean;
   /** The install's OpenAsy products and their addresses, from OPENASY_PRODUCTS, for the product switcher. */
   products?: ProductLink[];
+  /** The repositories file as last read (OPENASY_REPOSITORIES); null when it is not set. */
+  repositoriesFile?: () => RepositoriesFileState;
 }
 
 function metricsText(sast: Sast, version: string) {
@@ -189,7 +192,15 @@ function findingFilter(url: URL, repoId?: string): FindingFilter {
     throw new SastError(422, "invalid-body", `severity is a comma-separated list of ${SEVERITIES.join(", ")}.`);
   const q = url.searchParams.get("q")?.trim();
   if (q && q.length > 128) throw new SastError(422, "invalid-body", "q must be at most 128 characters.");
-  return { status: status as Status, severity, q: q || undefined, repoId: repoId ?? url.searchParams.get("repository") ?? undefined };
+  const rule = url.searchParams.get("rule")?.trim();
+  if (rule && rule.length > 256) throw new SastError(422, "invalid-body", "rule must be at most 256 characters.");
+  return {
+    status: status as Status,
+    severity,
+    q: q || undefined,
+    rule: rule || undefined,
+    repoId: repoId ?? url.searchParams.get("repository") ?? undefined,
+  };
 }
 
 export function createApp({
@@ -205,6 +216,7 @@ export function createApp({
   openapi,
   serveMetrics = true,
   products = [],
+  repositoriesFile,
 }: AppOptions) {
   // The served description includes /api/v1/auth from @openasy/auth, so the API reference documents sign-in too.
   const spec = openapi && JSON.stringify({ ...mergeOpenApi(openapi), info: { ...(openapi.info as object), version } });
@@ -220,6 +232,7 @@ export function createApp({
     { method: "GET", path: "/api/v1/version", auth: "none", handle: () => ({ product: "sast", version }) },
     { method: "GET", path: "/api/v1/products", auth: "viewer", handle: () => ({ products }) },
     { method: "GET", path: "/api/v1/summary", auth: "viewer", handle: () => sast.summary() },
+    { method: "GET", path: "/api/v1/overview", auth: "viewer", handle: () => sast.overview() },
 
     // SARIF in, from CI. The answer says whether the check passes, so a pipeline can fail on it.
     {
@@ -237,21 +250,21 @@ export function createApp({
     },
     { method: "GET", path: "/api/v1/scans/:id", auth: "viewer", handle: ({ params }) => sast.scan(params[0]!) },
 
-    // Repositories from a forge, scanned by sast-agent (ADR 0036). A token reads code, so connections are the owner's.
-    { method: "GET", path: "/api/v1/connections", auth: "admin", handle: () => ({ connections: forge.listConnections() }) },
+    // Repositories from a forge, scanned by sast-agent (ADR 0036). Connections come from the repositories file
+    // (OPENASY_REPOSITORIES, ADR 0052); there is no route that makes one. Ones made in the UI before can be removed.
     {
-      method: "POST",
+      method: "GET",
       path: "/api/v1/connections",
-      auth: "owner",
-      handle: async ({ res, body }) => {
-        const c = await forge.createConnection(await body());
-        // The account's repositories, and their first scans, without waiting for the next look.
-        void forge.poll();
-        json(res, 201, c);
-      },
+      auth: "admin",
+      handle: () => ({ connections: forge.listConnections(), repositoriesFile: repositoriesFile?.() ?? null }),
     },
     { method: "DELETE", path: "/api/v1/connections/:id", auth: "owner", handle: ({ res, params }) => (forge.deleteConnection(params[0]!), noContent(res)) },
-    { method: "POST", path: "/api/v1/connections/sync", auth: "admin", handle: async () => (await forge.poll(), { connections: forge.listConnections() }) },
+    {
+      method: "POST",
+      path: "/api/v1/connections/sync",
+      auth: "admin",
+      handle: async () => (await forge.poll(), { connections: forge.listConnections(), repositoriesFile: repositoriesFile?.() ?? null }),
+    },
     // Rules the install writes, and rules switched off (ADR 0036).
     { method: "GET", path: "/api/v1/rules", auth: "viewer", handle: () => forge.listRules() },
     { method: "POST", path: "/api/v1/rules", auth: "admin", handle: async ({ res, body }) => json(res, 201, forge.createRule(await body(RULE_LIMIT))) },

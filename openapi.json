@@ -608,6 +608,16 @@
             }
           },
           {
+            "name": "rule",
+            "in": "query",
+            "required": false,
+            "description": "Only this rule's findings, by its id.",
+            "schema": {
+              "type": "string",
+              "maxLength": 256
+            }
+          },
+          {
             "name": "limit",
             "in": "query",
             "required": false,
@@ -759,7 +769,7 @@
             "adminToken": []
           }
         ],
-        "description": "Needs the viewer role.",
+        "description": "Needs the viewer role. Findings of archived repositories are left out.",
         "parameters": [
           {
             "name": "repository",
@@ -802,6 +812,16 @@
             "schema": {
               "type": "string",
               "maxLength": 128
+            }
+          },
+          {
+            "name": "rule",
+            "in": "query",
+            "required": false,
+            "description": "Only this rule's findings, by its id.",
+            "schema": {
+              "type": "string",
+              "maxLength": 256
             }
           },
           {
@@ -879,6 +899,49 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Summary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-openasy-role": "viewer"
+      }
+    },
+    "/api/v1/overview": {
+      "get": {
+        "operationId": "getOverview",
+        "tags": [
+          "Product"
+        ],
+        "summary": "Findings over time, the noisiest rules and repositories, and checks",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "apiToken": []
+          },
+          {
+            "adminToken": []
+          }
+        ],
+        "description": "Needs the viewer role.",
+        "responses": {
+          "200": {
+            "description": "For the overview page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Overview"
                 }
               }
             }
@@ -1078,67 +1141,7 @@
             "$ref": "#/components/responses/Problem"
           }
         },
-        "description": "Needs the admin role."
-      },
-      "post": {
-        "security": [
-          {
-            "session": []
-          },
-          {
-            "apiToken": []
-          },
-          {
-            "adminToken": []
-          }
-        ],
-        "operationId": "createConnection",
-        "tags": [
-          "Connections"
-        ],
-        "summary": "Connect a GitHub account",
-        "description": "The token is checked with GitHub, then sealed with openasy-kek. The account's repositories are listed at once. 503 without openasy-kek.\n\nNeeds the owner role.",
-        "x-openasy-role": "owner",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/NewConnection"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Connected.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Connection"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "403": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "422": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "503": {
-            "$ref": "#/components/responses/Problem"
-          }
-        }
+        "description": "Forge accounts come from the repositories file (OPENASY_REPOSITORIES, ADR 0052), with their tokens read from the environment variables the file names (secrets/sast.env); there is no route that makes one. Connections made in the UI before the file stay until the file names the same account.\n\nNeeds the admin role."
       }
     },
     "/api/v1/connections/{id}": {
@@ -2244,6 +2247,7 @@
         "type": "object",
         "required": [
           "repositories",
+          "archived",
           "open",
           "suppressed",
           "failingChecks",
@@ -2252,7 +2256,12 @@
         "additionalProperties": false,
         "properties": {
           "repositories": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Repositories that are not archived."
+          },
+          "archived": {
+            "type": "integer",
+            "description": "Repositories archived on their forge, or gone from it."
           },
           "open": {
             "$ref": "#/components/schemas/Counts"
@@ -2367,6 +2376,18 @@
             "type": "boolean",
             "description": "Whether sast-agent scans it when its default branch moves."
           },
+          "archivedAt": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "date-time"
+              }
+            ],
+            "description": "When it was found archived on its forge, or gone from the account: it is no longer scanned and its findings are not counted as open. Null while it is active."
+          },
           "headCommit": {
             "type": [
               "string",
@@ -2380,6 +2401,10 @@
               "null"
             ],
             "description": "The last commit sast-agent scanned."
+          },
+          "scanFromFile": {
+            "type": "boolean",
+            "description": "The repositories file says whether it is scanned; PATCH scanEnabled answers 409."
           }
         }
       },
@@ -2882,6 +2907,9 @@
           "kind",
           "account",
           "apiUrl",
+          "source",
+          "fileName",
+          "tokenVar",
           "createdAt",
           "syncedAt",
           "error",
@@ -2913,6 +2941,28 @@
               "https://gitlab.com/api/v4"
             ]
           },
+          "source": {
+            "type": "string",
+            "enum": [
+              "ui",
+              "file"
+            ],
+            "description": "file: from the repositories file (OPENASY_REPOSITORIES, ADR 0052), changed there; DELETE answers 409. ui: made in the UI before the file, kept until the file names the same account."
+          },
+          "fileName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its entry's name in the file."
+          },
+          "tokenVar": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The environment variable its token is read from, kept in secrets/sast.env; never the token."
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -2941,7 +2991,8 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "connections"
+          "connections",
+          "repositoriesFile"
         ],
         "properties": {
           "connections": {
@@ -2949,6 +3000,17 @@
             "items": {
               "$ref": "#/components/schemas/Connection"
             }
+          },
+          "repositoriesFile": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RepositoriesFile"
+              }
+            ],
+            "description": "null when OPENASY_REPOSITORIES is not set."
           }
         }
       },
@@ -3423,6 +3485,203 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "RepositoriesFile": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "appliedAt",
+          "forges",
+          "repositories",
+          "error",
+          "warnings"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "appliedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the file was last read and applied."
+          },
+          "forges": {
+            "type": "integer"
+          },
+          "repositories": {
+            "type": "integer"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the file on disk is not applied; the last good version stays."
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Things to fix that did not stop the file, such as a token that is not set."
+          }
+        }
+      },
+      "Overview": {
+        "type": "object",
+        "required": [
+          "open",
+          "days",
+          "weeks",
+          "topRules",
+          "topRepositories",
+          "checks"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "open": {
+            "$ref": "#/components/schemas/Counts"
+          },
+          "days": {
+            "type": "array",
+            "description": "Open findings at the end of each of the last 30 days (UTC), oldest first; the last one is now.",
+            "items": {
+              "type": "object",
+              "required": [
+                "day",
+                "open"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "day": {
+                  "type": "string",
+                  "format": "date"
+                },
+                "open": {
+                  "$ref": "#/components/schemas/Counts"
+                }
+              }
+            }
+          },
+          "weeks": {
+            "type": "array",
+            "description": "Findings first seen and fixed on the default branches in each of the last 12 weeks, oldest first.",
+            "items": {
+              "type": "object",
+              "required": [
+                "week",
+                "new",
+                "fixed"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "week": {
+                  "type": "string",
+                  "format": "date",
+                  "description": "The week's first day."
+                },
+                "new": {
+                  "type": "integer"
+                },
+                "fixed": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "topRules": {
+            "type": "array",
+            "description": "The 10 rules with the most open findings.",
+            "items": {
+              "type": "object",
+              "required": [
+                "rule",
+                "open",
+                "severity"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "rule": {
+                  "type": "string"
+                },
+                "open": {
+                  "type": "integer"
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "critical",
+                    "high",
+                    "medium",
+                    "low"
+                  ],
+                  "description": "The most severe of its open findings."
+                }
+              }
+            }
+          },
+          "topRepositories": {
+            "type": "array",
+            "description": "The 10 repositories with the most open findings.",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "name",
+                "open"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "open": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "checks": {
+            "type": "object",
+            "description": "Pull request and branch scans that passed and failed their check.",
+            "required": [
+              "days7",
+              "days30"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "days7": {
+                "$ref": "#/components/schemas/CheckCounts"
+              },
+              "days30": {
+                "$ref": "#/components/schemas/CheckCounts"
+              }
+            }
+          }
+        }
+      },
+      "CheckCounts": {
+        "type": "object",
+        "required": [
+          "passed",
+          "failed"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "passed": {
+            "type": "integer"
+          },
+          "failed": {
+            "type": "integer"
           }
         }
       }

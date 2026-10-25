@@ -153,6 +153,16 @@ export const MIGRATIONS = [
    UPDATE repositories SET connection_id = (SELECT connection_id FROM repo_connections c WHERE c.id = repositories.id)
      WHERE id IN (SELECT id FROM repo_connections);
    DROP TABLE repo_connections;`,
+  // Connections come from the repositories file (OPENASY_REPOSITORIES, ADR 0052); ones made in the UI before stay
+  // until the file names the same account. file_name is the entry's name there, token_var the environment variable its token is read from.
+  // scan_from_file marks a repository whose scan_enabled the file sets, which the UI then cannot change.
+  `ALTER TABLE forge_connections ADD COLUMN source TEXT NOT NULL DEFAULT 'ui' CHECK (source IN ('ui', 'file'));
+   ALTER TABLE forge_connections ADD COLUMN file_name TEXT;
+   ALTER TABLE forge_connections ADD COLUMN token_var TEXT;
+   ALTER TABLE repositories ADD COLUMN scan_from_file INTEGER NOT NULL DEFAULT 0;`,
+  // A repository archived on its forge, or gone from the account, is no longer scanned and its findings leave the open
+  // ones, without being called fixed. It comes back, with its findings, when it is active there again.
+  `ALTER TABLE repositories ADD COLUMN archived_at TEXT;`,
 ];
 
 /** Opens the product's single SQLite file in WAL mode (ADR 0011) and migrates it forward. */

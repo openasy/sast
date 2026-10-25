@@ -78,7 +78,8 @@
     "source": "Kaynak",
     "ci": "CI",
     "connectGithubOrCi": "Bir GitHub ya da GitLab hesabı bağlayın veya CI'dan bir tarama gönderin. Bkz.",
-    "forgeOff": "{{forge}}, kapalı"
+    "forgeOff": "{{forge}}, kapalı",
+    "archived": "Arşivlendi"
   },
   "repositoryPage": {
     "repositoryNotFound": "Depo bulunamadı",
@@ -118,7 +119,10 @@
     "headNotScanned": "Son commit, {{commit}}, henüz taranmadı.",
     "notScannedYet": "Henüz taranmadı.",
     "scanNow": "Şimdi tara",
-    "queued": "Sırada"
+    "queued": "Sırada",
+    "setInTheFile": "Bu reponun taranıp taranmayacağını repositories dosyası belirler.",
+    "archivedTitle": "{{ago}} arşivlendi",
+    "archivedDetail": "Forge'unda arşivlenmiş ya da hesaptan çıkmış. Artık taranmıyor ve bulguları açık sayılmıyor; orada yeniden etkin olduğunda bulgularıyla birlikte geri gelir."
   },
   "scanPage": {
     "scanNotFound": "Tarama bulunamadı",
@@ -171,7 +175,8 @@
     "apiTokens": "API token'ları",
     "account": "Hesap",
     "github": "GitHub ve GitLab",
-    "rules": "Kurallar"
+    "rules": "Kurallar",
+    "overview": "Genel bakış"
   },
   "failOn": {
     "critical": "Kritik",
@@ -190,19 +195,18 @@
     "title": "GitHub ve GitLab",
     "description": "SAST, buradaki GitHub ve GitLab hesaplarının arşivlenmemiş depolarını izler. Bir ajan her varsayılan dalı ilerlediğinde ve ona açılan her pull request'i ya da merge request'i tarar; sonuç platforma OpenAsy SAST commit durumu ve eklediklerini listeleyen tek bir yorum olarak döner. Kod ajanda kalır; SAST yalnızca bulguları tutar.",
     "lookNow": "Şimdi bak",
-    "connectAccount": "Hesap bağla",
     "noAgentOnline": "Çevrimiçi ajan yok",
     "noAgentOnlineDetail": "Taramalar, bir ajan isteyene kadar kuyrukta bekler. Aşağıdan bir tane ekleyin ve komutuyla başlatın.",
     "accounts": "Hesaplar",
-    "accountsDescription": "Birkaç dakikada bir bakılır. Bir depo kendi sayfasından kapatılabilir.",
+    "accountsDescription": "{{path}} dosyasından, birkaç dakikada bir okunur. Dosya belirlemedikçe bir repo kendi sayfasından kapatılabilir.",
     "account": "Hesap",
     "repositories": "Depolar",
     "lastLook": "Son bakış",
     "notYet": "Henüz değil",
     "actions": "İşlemler",
     "disconnect": "{{account}} bağlantısını kes",
-    "noAccounts": "Bağlı hesap yok",
-    "noAccountsDetail": "Kodunu okuyabilen bir token'la bir GitHub organizasyonu ya da kullanıcısı veya bir GitLab grubu ya da kullanıcısı bağlayın.",
+    "noAccounts": "Henüz hesap yok",
+    "noAccountsDetail": "GitHub organizasyonlarını ve GitLab gruplarını repositories dosyasına ekleyin, her token'ı dosyanın verdiği adla secrets/sast.env içine koyun. Dosyadaki değişiklik bir dakika içinde uygulanır; yeni bir token için sast yeniden başlatılmalı.",
     "agents": "Ajanlar",
     "agentsDescription": "sast-agent kodu, GitHub'a ya da GitLab'a ulaşabildiği yerde klonlar ve tarar. SAST'a o bağlanır; SAST ona asla bağlanmaz.",
     "name": "Ad",
@@ -240,19 +244,19 @@
     },
     "noJobs": "Henüz tarama işi yok",
     "noJobsDetail": "Hesabı bağlanınca her varsayılan dal bir kez sıraya alınır.",
-    "connectDescription": "Token GitHub ile kontrol edilir, mühürlenerek saklanır ve bir daha gösterilmez. Hesabın depolarının Contents ve Metadata'sına okuma, Pull requests ve Commit statuses'a okuma ve yazma erişimi olan ayrıntılı bir token yeterlidir.",
-    "accountHint": "Organizasyon ya da kullanıcı, örneğin acme.",
-    "token": "Token",
-    "cancel": "Vazgeç",
-    "connect": "Bağla",
     "startAgent": "{{name}} ajanını başlatın",
     "startAgentDescription": "Bunu ajanın SAST'a ve platforma ulaşabildiği yerde çalıştırın. Token bir kez, 7 gün boyunca çalışır ve yeniden gösterilmez.",
     "done": "Tamam",
     "forge": "Platform",
-    "gitlabAddress": "GitLab adresi",
-    "gitlabAddressHint": "Kendi GitLab'ınız, yalnızca https. GitLab.com ya da kurulumun SAST_GITLAB_URL'i için boş bırakın.",
-    "accountHintGitlab": "Grup ya da kullanıcı, yoluyla: örneğin acme veya acme/platform. Alt gruplar grupla birlikte gelir.",
-    "connectDescriptionGitlab": "Token GitLab ile kontrol edilir, mühürlenerek saklanır ve bir daha gösterilmez. Developer ya da üstü için api kapsamlı bir grup ya da kişisel erişim token'ı yeterlidir: GitLab'da commit durumu yazabilen daha dar bir kapsam yok."
+    "fromFile": "Dosyadan",
+    "notInFile": "Dosyada yok",
+    "noFileTitle": "Repositories dosyası yok",
+    "noFileDetail": "OPENASY_REPOSITORIES'i forge hesaplarının YAML dosyasına ayarlayın ve token'larını secrets/sast.env ile sast'e verin. Hesap yalnızca dosyayla bağlanır.",
+    "fileNotApplied": "Repositories dosyası uygulanmadı",
+    "fileNotAppliedDetail": "{{error}} Son geçerli sürümündeki hesaplar düzeltilene kadar kalır ({{path}}).",
+    "fileWarnings": "Repositories dosyası uygulandı, düzeltilecekler var",
+    "moveToFile": "Bunları dosyaya taşıyın",
+    "moveToFileDetail": "Bu hesaplar dosyadan önce arayüzden bağlandı. Aşağıdaki gibi dosyaya ekleyin ve her token'ı secrets/sast.env içine koyun; dosya onları repoları ve bulgularıyla devralır."
   },
   "rulesPage": {
     "title": "Kurallar",
@@ -282,5 +286,26 @@
     "repository": "Depo",
     "finding": "Bulgu",
     "open": "{{open}} açık"
+  },
+  "overviewPage": {
+    "overview": "Genel bakış",
+    "passedAndFailed": "30 gün: {{passed}} geçti, {{failed}} kaldı",
+    "openOverTime": "Zaman içinde açık bulgular",
+    "openOverTimeDetail": "Son 30 günün her birinin sonunda, önem derecesine göre. Değerlendirilmiş bulgular ve arşivlenmiş repolar dahil değil.",
+    "newAndFixed": "Haftalık yeni ve düzeltilen",
+    "newAndFixedDetail": "Son 12 haftanın her birinde varsayılan dallarda ilk kez bulunan ve düzeltilen bulgular.",
+    "new": "Yeni",
+    "fixed": "Düzeltilen",
+    "topRules": "En çok açık bulgusu olan kurallar",
+    "topRulesDetail": "Bu listede üstte olan bir kural gürültü olabilir: bulgularını değerlendir ya da Kurallar altında kapat.",
+    "topRepositories": "En çok açık bulgusu olan repolar",
+    "topRepositoriesDetail": "Her reponun varsayılan dalındaki açık bulgular.",
+    "noOpenFindings": "Açık bulgu yok",
+    "bySeverity": "Öneme göre",
+    "bySeverityDetail": "Şu an açık bulgular.",
+    "open": "açık",
+    "checksPassed": "Geçen kontroller",
+    "checksPassedDetail": "Son 30 günde eşiğin üstünde yeni bir şey bulmayan pull request kontrolleri.",
+    "noChecks": "30 günde kontrol yok"
   }
 }

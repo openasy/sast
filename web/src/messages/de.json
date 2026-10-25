@@ -78,7 +78,8 @@
     "source": "Quelle",
     "ci": "CI",
     "connectGithubOrCi": "Verbinden Sie ein GitHub- oder GitLab-Konto, oder senden Sie einen Scan aus CI. Siehe",
-    "forgeOff": "{{forge}}, aus"
+    "forgeOff": "{{forge}}, aus",
+    "archived": "Archiviert"
   },
   "repositoryPage": {
     "repositoryNotFound": "Repository nicht gefunden",
@@ -118,7 +119,10 @@
     "headNotScanned": "Der neueste Commit, {{commit}}, ist noch nicht gescannt.",
     "notScannedYet": "Noch nicht gescannt.",
     "scanNow": "Jetzt scannen",
-    "queued": "In der Warteschlange"
+    "queued": "In der Warteschlange",
+    "setInTheFile": "Die Repositories-Datei legt fest, ob dieses Repository gescannt wird.",
+    "archivedTitle": "Archiviert {{ago}}",
+    "archivedDetail": "Es ist auf seiner Forge archiviert oder nicht mehr im Konto. Es wird nicht mehr gescannt, und seine Befunde zählen nicht als offen; sobald es dort wieder aktiv ist, kommt es mit ihnen zurück."
   },
   "scanPage": {
     "scanNotFound": "Scan nicht gefunden",
@@ -171,7 +175,8 @@
     "apiTokens": "API-Tokens",
     "account": "Konto",
     "github": "GitHub und GitLab",
-    "rules": "Regeln"
+    "rules": "Regeln",
+    "overview": "Übersicht"
   },
   "failOn": {
     "critical": "Kritisch",
@@ -190,19 +195,18 @@
     "title": "GitHub und GitLab",
     "description": "SAST folgt den Repositorys der GitHub- und GitLab-Konten hier, nicht den archivierten. Ein Agent scannt jeden Standard-Branch, wenn er sich bewegt, und jeden offenen Pull Request oder Merge Request darauf; das Ergebnis geht als Commit-Status OpenAsy SAST und als ein Kommentar mit dem, was er hinzufügt, an die Plattform zurück. Der Code bleibt beim Agent; SAST behält nur Befunde.",
     "lookNow": "Jetzt nachsehen",
-    "connectAccount": "Konto verbinden",
     "noAgentOnline": "Kein Agent ist online",
     "noAgentOnlineDetail": "Scans warten in der Warteschlange, bis ein Agent sie anfordert. Fügen Sie unten einen hinzu und starten Sie ihn mit seinem Befehl.",
     "accounts": "Konten",
-    "accountsDescription": "Alle paar Minuten nachgesehen. Ein Repository kann auf seiner eigenen Seite abgeschaltet werden.",
+    "accountsDescription": "Aus {{path}}, alle paar Minuten gelesen. Ein Repository lässt sich auf seiner Seite abschalten, außer die Datei legt es fest.",
     "account": "Konto",
     "repositories": "Repositorys",
     "lastLook": "Zuletzt nachgesehen",
     "notYet": "Noch nicht",
     "actions": "Aktionen",
     "disconnect": "{{account}} trennen",
-    "noAccounts": "Keine Konten verbunden",
-    "noAccountsDetail": "Verbinden Sie eine GitHub-Organisation oder einen Benutzer, oder eine GitLab-Gruppe oder einen Benutzer, mit einem Token, das den Code lesen kann.",
+    "noAccounts": "Noch keine Konten",
+    "noAccountsDetail": "Tragen Sie die GitHub-Organisationen und GitLab-Gruppen in die Repositories-Datei ein und legen Sie jedes Token unter dem Namen, den die Datei nennt, in secrets/sast.env ab. Eine Änderung der Datei gilt nach spätestens einer Minute; ein neues Token braucht einen Neustart von sast.",
     "agents": "Agents",
     "agentsDescription": "sast-agent klont und scannt den Code dort, wo er GitHub oder GitLab erreicht. Er verbindet sich mit SAST; SAST verbindet sich nie mit ihm.",
     "name": "Name",
@@ -240,19 +244,19 @@
     },
     "noJobs": "Noch keine Scan-Jobs",
     "noJobsDetail": "Jeder Standard-Branch wird einmal eingereiht, sobald sein Konto verbunden ist.",
-    "connectDescription": "Das Token wird bei GitHub geprüft, versiegelt gespeichert und nie wieder angezeigt. Ein feingranulares Token mit Lesezugriff auf Contents und Metadata der Repositorys des Kontos sowie Lese- und Schreibzugriff auf Pull requests und Commit statuses genügt.",
-    "accountHint": "Die Organisation oder der Benutzer, etwa acme.",
-    "token": "Token",
-    "cancel": "Abbrechen",
-    "connect": "Verbinden",
     "startAgent": "{{name}} starten",
     "startAgentDescription": "Führen Sie dies dort aus, wo der Agent SAST und die Plattform erreicht. Das Token funktioniert einmal, 7 Tage lang, und wird nicht erneut angezeigt.",
     "done": "Fertig",
     "forge": "Plattform",
-    "gitlabAddress": "GitLab-Adresse",
-    "gitlabAddressHint": "Ihr eigenes GitLab, nur https. Leer für GitLab.com oder SAST_GITLAB_URL der Installation.",
-    "accountHintGitlab": "Die Gruppe oder der Benutzer über den Pfad, etwa acme oder acme/platform. Untergruppen gehören zur Gruppe.",
-    "connectDescriptionGitlab": "Das Token wird bei GitLab geprüft, versiegelt gespeichert und nie wieder angezeigt. Ein Gruppen- oder persönliches Zugriffstoken mit dem Scope api, für Developer oder höher, genügt: GitLab hat keinen kleineren Scope, der einen Commit-Status setzen darf."
+    "fromFile": "Aus der Datei",
+    "notInFile": "Nicht in der Datei",
+    "noFileTitle": "Keine Repositories-Datei",
+    "noFileDetail": "Setzen Sie OPENASY_REPOSITORIES auf eine YAML-Datei mit Forge-Konten und geben Sie sast deren Tokens in secrets/sast.env. Nur über die Datei wird ein Konto verbunden.",
+    "fileNotApplied": "Die Repositories-Datei wird nicht angewendet",
+    "fileNotAppliedDetail": "{{error}} Die Konten aus ihrer letzten gültigen Fassung bleiben, bis sie behoben ist ({{path}}).",
+    "fileWarnings": "Die Repositories-Datei ist angewendet, mit offenen Punkten",
+    "moveToFile": "In die Datei übernehmen",
+    "moveToFileDetail": "Diese Konten wurden vor der Datei in der Oberfläche verbunden. Tragen Sie sie wie unten ein und legen Sie jedes Token in secrets/sast.env ab; dann übernimmt die Datei sie mit ihren Repositories und Befunden."
   },
   "rulesPage": {
     "title": "Regeln",
@@ -282,5 +286,26 @@
     "repository": "Repository",
     "finding": "Befund",
     "open": "{{open}} offen"
+  },
+  "overviewPage": {
+    "overview": "Übersicht",
+    "passedAndFailed": "30 Tage: {{passed}} bestanden, {{failed}} fehlgeschlagen",
+    "openOverTime": "Offene Befunde im Zeitverlauf",
+    "openOverTimeDetail": "Am Ende jedes der letzten 30 Tage, nach Schweregrad. Bewertete Befunde und archivierte Repositories sind nicht enthalten.",
+    "newAndFixed": "Neu und behoben, pro Woche",
+    "newAndFixedDetail": "Befunde, die in jeder der letzten 12 Wochen auf den Standard-Branches erstmals gefunden und behoben wurden.",
+    "new": "Neu",
+    "fixed": "Behoben",
+    "topRules": "Regeln mit den meisten offenen Befunden",
+    "topRulesDetail": "Eine Regel weit oben kann Rauschen sein: bewerten Sie ihre Befunde oder schalten Sie sie unter Regeln ab.",
+    "topRepositories": "Repositories mit den meisten offenen Befunden",
+    "topRepositoriesDetail": "Offene Befunde des Standard-Branches jedes Repositorys.",
+    "noOpenFindings": "Keine offenen Befunde",
+    "bySeverity": "Nach Schweregrad",
+    "bySeverityDetail": "Jetzt offene Befunde.",
+    "open": "offen",
+    "checksPassed": "Bestandene Prüfungen",
+    "checksPassedDetail": "Pull-Request-Prüfungen der letzten 30 Tage, die nichts Neues ab der Schwelle fanden.",
+    "noChecks": "Keine Prüfungen in 30 Tagen"
   }
 }

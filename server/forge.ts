@@ -6,6 +6,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { Keyring } from "./kek.ts";
+import type { RepositoriesFile } from "./repositories.ts";
 import { SastError } from "./sast.ts";
 
 const now = () => new Date().toISOString();
@@ -13,9 +14,6 @@ const bad = (detail: string) => new SastError(422, "invalid-body", detail);
 const notFound = (what: string) => new SastError(404, "not-found", `${what} does not exist.`);
 const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 
-const ACCOUNT = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
-// A GitLab group, subgroup or user by its full path, such as acme or acme/platform.
-const GITLAB_ACCOUNT = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,254}(?:\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,254}){0,19}$/;
 const AGENT_NAME = /^[a-z0-9][a-z0-9.-]{0,62}$/;
 const ENROLL_TTL_MS = 7 * 864e5;
 const LEASE_MS = 30 * 60_000;
@@ -35,6 +33,11 @@ export interface Connection {
   kind: ForgeKind;
   account: string;
   apiUrl: string;
+  /** file: from the repositories file (OPENASY_REPOSITORIES, ADR 0052), changed there. ui: made in the UI before it. */
+  source: "ui" | "file";
+  /** Its entry's name in the file, and the file its token is read from. */
+  fileName: string | null;
+  tokenVar: string | null;
   createdAt: string;
   syncedAt: string | null;
   error: string | null;
@@ -145,7 +148,8 @@ interface ForgePull {
 /** What sast asks of a forge. Each forge answers with its own API; a refused write says what the token lacks. */
 interface ForgeApi {
   me(token: string): Promise<Answer>;
-  repositories(token: string, account: string): Promise<ForgeRepo[]>;
+  /** The account's repositories; complete is false when the list was cut short at its last page. */
+  repositories(token: string, account: string): Promise<{ repos: ForgeRepo[]; complete: boolean }>;
   /** The branch's head commit; null when the branch is not there, as in an empty repository. */
   head(token: string, repo: string, branch: string): Promise<string | null>;
   pulls(token: string, repo: string): Promise<ForgePull[]>;
@@ -251,7 +255,7 @@ function githubApi(http: typeof fetch, base: string): ForgeApi {
             });
         url = r.next;
       }
-      return out;
+      return { repos: out, complete: !url };
     },
     async head(token, repo, branch) {
       const r = await call(token, `/repos/${repo}/branches/${encodeURIComponent(branch)}`);
@@ -322,7 +326,7 @@ function gitlabApi(http: typeof fetch, base: string): ForgeApi {
           });
         url = r.next;
       }
-      return out;
+      return { repos: out, complete: !url };
     },
     async head(token, repo, branch) {
       const r = await call(token, `${project(repo)}/repository/branches/${encodeURIComponent(branch)}`);
@@ -350,19 +354,6 @@ function gitlabApi(http: typeof fetch, base: string): ForgeApi {
   };
 }
 
-/** An https address of a GitLab, without credentials, query or fragment; its API is under /api/v4. */
-function gitlabBase(value: unknown): string {
-  let url: URL;
-  try {
-    url = new URL(typeof value === "string" ? value.trim() : "");
-  } catch {
-    throw bad("url is the https address of a GitLab, such as https://gitlab.example.com.");
-  }
-  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash)
-    throw bad("url is the https address of a GitLab, such as https://gitlab.example.com.");
-  return url.href.replace(/\/$/, "");
-}
-
 export function createForge(opts: ForgeOptions) {
   const { db } = opts;
   const http = opts.fetch ?? fetch;
@@ -378,6 +369,9 @@ export function createForge(opts: ForgeOptions) {
     kind: r.kind as ForgeKind,
     account: r.account!,
     apiUrl: r.api_url!,
+    source: (r.source ?? "ui") as Connection["source"],
+    fileName: r.file_name ?? null,
+    tokenVar: r.token_var ?? null,
     createdAt: r.created_at!,
     syncedAt: r.synced_at ?? null,
     error: r.error ?? null,
@@ -388,45 +382,89 @@ export function createForge(opts: ForgeOptions) {
     return (db.prepare("SELECT * FROM forge_connections ORDER BY account").all() as Array<Record<string, string | null>>).map(toConnection);
   }
 
-  /** Checks the token against the forge before keeping it: a wrong one is refused here, not at the first poll. */
-  async function createConnection(body: { kind?: unknown; account?: unknown; token?: unknown; url?: unknown }): Promise<Connection> {
-    if (!opts.keyring) throw new SastError(503, "not-configured", "Mount openasy-kek: forge tokens are kept only sealed (ADR 0021).");
-    const kind: ForgeKind = body.kind === undefined ? "github" : (body.kind as ForgeKind);
-    if (kind !== "github" && kind !== "gitlab") throw bad("kind is github or gitlab.");
-    if (kind === "github" && body.url !== undefined) throw bad("url is for GitLab; GitHub's address is the install's SAST_GITHUB_API.");
-    const account = typeof body.account === "string" ? body.account.trim().replace(/^\/+|\/+$/g, "") : "";
-    if (kind === "github" && !ACCOUNT.test(account)) throw bad("account is a GitHub organization or user, such as acme.");
-    if (kind === "gitlab" && !GITLAB_ACCOUNT.test(account)) throw bad("account is a GitLab group or user by its path, such as acme or acme/platform.");
-    const token = typeof body.token === "string" ? body.token.trim() : "";
-    if (token.length < 20 || token.length > 400 || /\s/.test(token))
-      throw bad(kind === "github" ? "token is a GitHub token that reads the account's code." : "token is a GitLab token with the api scope.");
-    const apiUrl = kind === "github" ? githubBase : `${body.url === undefined ? gitlabUrl : gitlabBase(body.url)}/api/v4`;
-    if (db.prepare("SELECT 1 FROM forge_connections WHERE kind = ? AND api_url = ? AND account = ? COLLATE NOCASE").get(kind, apiUrl, account))
-      throw new SastError(409, "conflict", `${account} is connected already.`);
-    const api = apiOf({ kind, api_url: apiUrl });
-    let me: Answer;
-    try {
-      me = await api.me(token);
-    } catch (err) {
-      throw bad(`${api.name} could not be reached: ${(err as Error).message}`);
+  /** Repository settings from the file, by name in lower case; applied on each sync and to repositories found later. */
+  let fileRepos = new Map<string, boolean>();
+
+  /** Sets scan_enabled of the repositories the file names, and frees the ones it no longer names. */
+  function applyRepoSettings() {
+    for (const r of db.prepare("SELECT id, name, scan_from_file FROM repositories").all() as Array<{ id: string; name: string; scan_from_file: number }>) {
+      const scan = fileRepos.get(r.name.toLowerCase());
+      if (scan === undefined) {
+        // No longer in the file: scanned again, as a repository the file never named is.
+        if (r.scan_from_file) db.prepare("UPDATE repositories SET scan_enabled = 1, scan_from_file = 0 WHERE id = ?").run(r.id);
+        continue;
+      }
+      db.prepare("UPDATE repositories SET scan_enabled = ?, scan_from_file = 1 WHERE id = ?").run(scan ? 1 : 0, r.id);
+      if (!scan) db.prepare("DELETE FROM scan_jobs WHERE repo_id = ? AND status = 'queued'").run(r.id);
     }
-    if (!me.ok) throw bad(me.status === 401 ? `${api.name} refused the token.` : `${api.name} answered ${me.status} to the token.`);
-    const id = randomUUID();
-    db.prepare("INSERT INTO forge_connections (id, kind, account, api_url, token, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(
-      id,
-      kind,
-      account,
-      apiUrl,
-      opts.keyring.seal(token),
-      now(),
-    );
-    opts.log?.("info", "forge connected", { kind, account });
-    return toConnection(db.prepare("SELECT * FROM forge_connections WHERE id = ?").get(id) as Record<string, string | null>);
   }
 
-  /** Its repositories stay with their findings, no longer scanned from the forge. */
+  /**
+   * Applies the repositories file (ADR 0052): a connection for each forge entry, with its token read from the environment
+   * variable it names and kept sealed; a connection the file no longer names goes, its repositories staying with their findings.
+   * One made in the UI before the file is taken over when the file names the same account, and kept otherwise. The
+   * token is checked at the next poll, which says on the connection when the forge refuses it. Returns warnings.
+   */
+  function syncFile(file: RepositoriesFile, token: (variable: string) => string): string[] {
+    const warnings: string[] = [];
+    if (!opts.keyring) {
+      if (file.forges.length) warnings.push("Mount openasy-kek: forge tokens are kept only sealed (ADR 0021). No forge from the file is connected.");
+      fileRepos = new Map(file.repositories.map((r) => [r.name.toLowerCase(), r.scan]));
+      applyRepoSettings();
+      return warnings;
+    }
+    const keep = new Set<string>();
+    for (const e of file.forges) {
+      const apiUrl = e.forge === "github" ? githubBase : `${e.url ?? gitlabUrl}/api/v4`;
+      const row = db
+        .prepare("SELECT * FROM forge_connections WHERE kind = ? AND api_url = ? AND account = ? COLLATE NOCASE")
+        .get(e.forge, apiUrl, e.account) as Record<string, string | null> | undefined;
+      let sealed: string | undefined;
+      try {
+        const t = token(e.token);
+        // A token that did not change keeps its sealed copy, so the database is not written at every check.
+        sealed = row?.token && row.source === "file" && opts.keyring.open(row.token).toString("utf8") === t ? row.token : opts.keyring.seal(t);
+      } catch (err) {
+        warnings.push(`${e.name}: ${(err as Error).message}`);
+      }
+      if (row) {
+        keep.add(row.id!);
+        db.prepare("UPDATE forge_connections SET source = 'file', file_name = ?, token_var = ?, account = ?, token = COALESCE(?, token) WHERE id = ?").run(
+          e.name,
+          e.token,
+          e.account,
+          sealed ?? null,
+          row.id!,
+        );
+        if (row.source !== "file") opts.log?.("info", "forge connection now from the repositories file", { name: e.name, account: e.account });
+        continue;
+      }
+      // A new entry waits for its token; the warning says which file is missing.
+      if (!sealed) continue;
+      const id = randomUUID();
+      db.prepare(
+        "INSERT INTO forge_connections (id, kind, account, api_url, token, created_at, source, file_name, token_var) VALUES (?, ?, ?, ?, ?, ?, 'file', ?, ?)",
+      ).run(id, e.forge, e.account, apiUrl, sealed, now(), e.name, e.token);
+      keep.add(id);
+      opts.log?.("info", "forge connected from the repositories file", { name: e.name, kind: e.forge, account: e.account });
+    }
+    for (const c of db.prepare("SELECT id, account FROM forge_connections WHERE source = 'file'").all() as Array<{ id: string; account: string }>) {
+      if (keep.has(c.id)) continue;
+      db.prepare("DELETE FROM forge_connections WHERE id = ?").run(c.id);
+      opts.log?.("info", "forge connection removed with its entry in the repositories file", { account: c.account });
+    }
+    fileRepos = new Map(file.repositories.map((r) => [r.name.toLowerCase(), r.scan]));
+    applyRepoSettings();
+    return warnings;
+  }
+
+  /** Its repositories stay with their findings, no longer scanned from the forge. One from the file goes with its entry. */
   function deleteConnection(id: string) {
-    if (db.prepare("DELETE FROM forge_connections WHERE id = ?").run(id).changes === 0) throw notFound("The connection");
+    const c = db.prepare("SELECT source FROM forge_connections WHERE id = ?").get(id) as { source: string } | undefined;
+    if (!c) throw notFound("The connection");
+    if (c.source === "file")
+      throw new SastError(409, "conflict", "This connection comes from the repositories file (OPENASY_REPOSITORIES); remove its entry there.");
+    db.prepare("DELETE FROM forge_connections WHERE id = ?").run(id);
   }
 
   /**
@@ -438,14 +476,23 @@ export function createForge(opts: ForgeOptions) {
       try {
         const api = apiOf({ kind: c.kind!, api_url: c.api_url! });
         const token = opts.keyring!.open(c.token!).toString("utf8");
-        const repos = await api.repositories(token, c.account!);
+        const { repos, complete } = await api.repositories(token, c.account!);
         for (const repo of repos) {
-          if (repo.skip) continue;
           let row = db.prepare("SELECT * FROM repositories WHERE name = ?").get(repo.name) as Record<string, string | number | null> | undefined;
+          if (repo.skip) {
+            // Archived or disabled on the forge: no longer scanned, and its findings leave the open ones.
+            if (row && row.connection_id === c.id) archive(row);
+            continue;
+          }
+          if (row?.archived_at && (!row.connection_id || row.connection_id === c.id)) {
+            db.prepare("UPDATE repositories SET archived_at = NULL WHERE id = ?").run(row.id as string);
+            opts.log?.("info", "repository active again on its forge", { repository: repo.name });
+          }
           if (!row) {
             db.prepare(
               "INSERT INTO repositories (id, name, default_branch, fail_on, created_at, connection_id, clone_url) VALUES (?, ?, ?, 'high', ?, ?, ?)",
             ).run(randomUUID(), repo.name, repo.defaultBranch, now(), c.id!, repo.cloneUrl);
+            if (fileRepos.has(repo.name.toLowerCase())) applyRepoSettings();
             row = db.prepare("SELECT * FROM repositories WHERE name = ?").get(repo.name) as Record<string, string | number | null>;
           } else if (row.connection_id && row.connection_id !== c.id) {
             // The same name on another connection, such as acme/web on both GitHub and GitLab: the first one keeps it.
@@ -468,12 +515,28 @@ export function createForge(opts: ForgeOptions) {
           db.prepare("UPDATE repositories SET pushed_at = ?, head_commit = ? WHERE id = ?").run(repo.pushedAt, head, row.id as string);
           if (head !== row.scanned_commit) queue(row.id as string, repo.defaultBranch, head);
         }
+        // Gone from the account: deleted, or out of the token's reach. A list cut short proves nothing.
+        if (complete) {
+          const listed = new Set(repos.map((r) => r.name));
+          for (const row of db.prepare("SELECT * FROM repositories WHERE connection_id = ? AND archived_at IS NULL").all(c.id!) as Array<
+            Record<string, string | number | null>
+          >)
+            if (!listed.has(row.name as string)) archive(row);
+        }
         db.prepare("UPDATE forge_connections SET synced_at = ?, error = NULL WHERE id = ?").run(now(), c.id!);
       } catch (err) {
         db.prepare("UPDATE forge_connections SET error = ? WHERE id = ?").run((err as Error).message.slice(0, 300), c.id!);
         opts.log?.("warn", "forge poll failed", { account: c.account, error: (err as Error).message });
       }
     }
+  }
+
+  /** Stops scanning a repository that is archived on its forge or gone from it; its findings stay, out of the open ones. */
+  function archive(row: Record<string, string | number | null>) {
+    if (row.archived_at) return;
+    db.prepare("UPDATE repositories SET archived_at = ? WHERE id = ?").run(now(), row.id as string);
+    db.prepare("DELETE FROM scan_jobs WHERE repo_id = ? AND status = 'queued'").run(row.id as string);
+    opts.log?.("info", "repository archived: archived on its forge or gone from the account", { repository: row.name });
   }
 
   /**
@@ -548,11 +611,12 @@ export function createForge(opts: ForgeOptions) {
 
   /** Scans a repository's default branch again at the next agent's turn, as Scan now does. */
   function scanNow(repoId: string) {
-    const r = db.prepare("SELECT id, default_branch, head_commit, clone_url FROM repositories WHERE id = ?").get(repoId) as
-      { id: string; default_branch: string; head_commit: string | null; clone_url: string | null } | undefined;
+    const r = db.prepare("SELECT id, default_branch, head_commit, clone_url, archived_at FROM repositories WHERE id = ?").get(repoId) as
+      { id: string; default_branch: string; head_commit: string | null; clone_url: string | null; archived_at: string | null } | undefined;
     if (!r) throw notFound("The repository");
     if (!r.clone_url || !r.head_commit)
       throw new SastError(409, "conflict", "Only a repository from a connection is scanned by an agent; CI sends the others.");
+    if (r.archived_at) throw new SastError(409, "conflict", "The repository is archived on its forge, or gone from it: it is no longer scanned.");
     db.prepare("DELETE FROM scan_jobs WHERE repo_id = ? AND commit_sha = ? AND status IN ('done', 'failed')").run(r.id, r.head_commit);
     queue(r.id, r.default_branch, r.head_commit);
     return listJobs({ repoId: r.id })[0]!;
@@ -728,7 +792,7 @@ export function createForge(opts: ForgeOptions) {
       .prepare(
         `SELECT j.*, r.name, r.clone_url, c.token FROM scan_jobs j JOIN repositories r ON r.id = j.repo_id
          JOIN forge_connections c ON c.id = r.connection_id
-         WHERE j.status = 'queued' AND r.scan_enabled = 1 ORDER BY j.pull_request IS NOT NULL, j.created_at LIMIT 1`,
+         WHERE j.status = 'queued' AND r.scan_enabled = 1 AND r.archived_at IS NULL ORDER BY j.pull_request IS NOT NULL, j.created_at LIMIT 1`,
       )
       .get() as Record<string, string> | undefined;
     if (!job || !opts.keyring) return { jobs: [] };
@@ -851,7 +915,7 @@ export function createForge(opts: ForgeOptions) {
 
   return {
     listConnections,
-    createConnection,
+    syncFile,
     deleteConnection,
     poll,
     scanNow,
