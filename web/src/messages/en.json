@@ -76,10 +76,9 @@
     "sendAScanFromCi": "Send a scan from CI. See",
     "setup": "Setup",
     "source": "Source",
-    "github": "GitHub",
-    "githubOff": "GitHub, off",
     "ci": "CI",
-    "connectGithubOrCi": "Connect a GitHub account, or send a scan from CI. See"
+    "connectGithubOrCi": "Connect a GitHub or GitLab account, or send a scan from CI. See",
+    "forgeOff": "{{forge}}, off"
   },
   "repositoryPage": {
     "repositoryNotFound": "Repository not found",
@@ -113,7 +112,7 @@
     "noScans": "No scans",
     "nothingHasBeenSentFor": "Nothing has been sent for this repository.",
     "scanning": "Scanning",
-    "scanningDescription": "This repository comes from GitHub. An agent scans its default branch each time it moves.",
+    "scanningDescription": "This repository comes from {{forge}}. An agent scans its default branch each time it moves.",
     "scanThisRepository": "Scan this repository",
     "headScanned": "The latest commit, {{commit}}, is scanned.",
     "headNotScanned": "The latest commit, {{commit}}, is not scanned yet.",
@@ -171,7 +170,7 @@
     "signIn": "Sign-in",
     "apiTokens": "API tokens",
     "account": "Account",
-    "github": "GitHub",
+    "github": "GitHub and GitLab",
     "rules": "Rules"
   },
   "failOn": {
@@ -188,8 +187,8 @@
     "openFinding_other": "{{count}} open findings"
   },
   "githubPage": {
-    "title": "GitHub",
-    "description": "sast follows the repositories of the GitHub accounts here, not archived ones. An agent scans each default branch when it moves, and each open pull request into it, whose result goes back to GitHub as the commit status OpenAsy SAST and one comment listing what it adds. Code stays with the agent; sast keeps only findings.",
+    "title": "GitHub and GitLab",
+    "description": "sast follows the repositories of the GitHub and GitLab accounts here, not archived ones. An agent scans each default branch when it moves, and each open pull request or merge request into it, whose result goes back to the forge as the commit status OpenAsy SAST and one comment listing what it adds. Code stays with the agent; sast keeps only findings.",
     "lookNow": "Look now",
     "connectAccount": "Connect account",
     "noAgentOnline": "No agent is online",
@@ -203,9 +202,9 @@
     "actions": "Actions",
     "disconnect": "Disconnect {{account}}",
     "noAccounts": "No accounts connected",
-    "noAccountsDetail": "Connect a GitHub organization or user with a token that reads its code.",
+    "noAccountsDetail": "Connect a GitHub organization or user, or a GitLab group or user, with a token that reads its code.",
     "agents": "Agents",
-    "agentsDescription": "sast-agent clones and scans the code, where it can reach GitHub. It connects to sast; sast never connects to it.",
+    "agentsDescription": "sast-agent clones and scans the code, where it can reach GitHub or GitLab. It connects to sast; sast never connects to it.",
     "name": "Name",
     "status": "Status",
     "version": "Version",
@@ -217,7 +216,7 @@
     },
     "removeAgent": "Remove agent {{name}}",
     "noAgents": "No agents yet",
-    "noAgentsDetail": "Add one to scan repositories from GitHub.",
+    "noAgentsDetail": "Add one to scan repositories from GitHub and GitLab.",
     "agentName": "Agent name",
     "agentNameHint": "Lowercase letters, digits, dots and dashes, such as dc1.",
     "addAgent": "Add agent",
@@ -244,12 +243,16 @@
     "connectDescription": "The token is checked with GitHub, kept sealed, and never shown again. A fine-grained token with read access to Contents and Metadata of the account's repositories, and read and write access to Pull requests and Commit statuses, is enough.",
     "accountHint": "The organization or user, such as acme.",
     "token": "Token",
-    "tokenHint": "github_pat_...",
     "cancel": "Cancel",
     "connect": "Connect",
     "startAgent": "Start {{name}}",
-    "startAgentDescription": "Run this where the agent can reach sast and GitHub. The token works once, for 7 days, and is not shown again.",
-    "done": "Done"
+    "startAgentDescription": "Run this where the agent can reach sast and the forge. The token works once, for 7 days, and is not shown again.",
+    "done": "Done",
+    "forge": "Forge",
+    "gitlabAddress": "GitLab address",
+    "gitlabAddressHint": "Your own GitLab, https only. Empty for GitLab.com or the install's SAST_GITLAB_URL.",
+    "accountHintGitlab": "The group or user by its path, such as acme or acme/platform. Subgroups come with a group.",
+    "connectDescriptionGitlab": "The token is checked with GitLab, kept sealed, and never shown again. A group or personal access token with the api scope, for a Developer or more, is enough: GitLab has no smaller scope that may post a commit status."
   },
   "rulesPage": {
     "title": "Rules",

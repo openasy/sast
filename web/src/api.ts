@@ -28,7 +28,7 @@ export interface Repository {
   lastScan: { at: string; kind: "baseline" | "change"; branch: string; new: number; passed: boolean } | null;
   createdAt: string;
   /** github: from a connection, scanned by sast-agent; ci: sent from CI. */
-  source: "github" | "ci";
+  source: "github" | "gitlab" | "ci";
   scanEnabled: boolean;
   headCommit: string | null;
   scannedCommit: string | null;
@@ -52,7 +52,7 @@ export interface RuleList {
 /** A GitHub account whose repositories sast follows (ADR 0036). The token is never sent back. */
 export interface Connection {
   id: string;
-  kind: "github";
+  kind: "github" | "gitlab";
   account: string;
   apiUrl: string;
   createdAt: string;

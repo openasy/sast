@@ -49,6 +49,7 @@ const forge = createForge({
   keyring: secretsKey ? createKeyring(secretsKey) : undefined,
   ingest: (params, raw) => sast.ingest(params, raw),
   githubApi: process.env.SAST_GITHUB_API,
+  gitlabUrl: process.env.SAST_GITLAB_URL,
   publicUrl,
   log,
 });

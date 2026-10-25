@@ -76,10 +76,9 @@
     "sendAScanFromCi": "CI'dan bir tarama gönderin. Bkz.",
     "setup": "Kurulum",
     "source": "Kaynak",
-    "github": "GitHub",
-    "githubOff": "GitHub, kapalı",
     "ci": "CI",
-    "connectGithubOrCi": "Bir GitHub hesabı bağlayın ya da CI'dan bir tarama gönderin. Bkz."
+    "connectGithubOrCi": "Bir GitHub ya da GitLab hesabı bağlayın veya CI'dan bir tarama gönderin. Bkz.",
+    "forgeOff": "{{forge}}, kapalı"
   },
   "repositoryPage": {
     "repositoryNotFound": "Depo bulunamadı",
@@ -113,7 +112,7 @@
     "noScans": "Tarama yok",
     "nothingHasBeenSentFor": "Bu depo için hiçbir şey gönderilmedi.",
     "scanning": "Tarama",
-    "scanningDescription": "Bu depo GitHub'dan geliyor. Bir ajan, varsayılan dalı her ilerlediğinde onu tarar.",
+    "scanningDescription": "Bu depo {{forge}} üzerinden geliyor. Bir ajan, varsayılan dalı her ilerlediğinde onu tarar.",
     "scanThisRepository": "Bu depoyu tara",
     "headScanned": "Son commit, {{commit}}, tarandı.",
     "headNotScanned": "Son commit, {{commit}}, henüz taranmadı.",
@@ -171,7 +170,7 @@
     "signIn": "Oturum açma",
     "apiTokens": "API token'ları",
     "account": "Hesap",
-    "github": "GitHub",
+    "github": "GitHub ve GitLab",
     "rules": "Kurallar"
   },
   "failOn": {
@@ -188,8 +187,8 @@
     "openFinding_other": "{{count}} açık bulgu"
   },
   "githubPage": {
-    "title": "GitHub",
-    "description": "SAST, buradaki GitHub hesaplarının arşivlenmemiş depolarını izler. Bir ajan her varsayılan dalı ilerlediğinde ve ona açılan her pull request'i tarar; sonuç GitHub'a OpenAsy SAST commit durumu ve eklediklerini listeleyen tek bir yorum olarak döner. Kod ajanda kalır; SAST yalnızca bulguları tutar.",
+    "title": "GitHub ve GitLab",
+    "description": "SAST, buradaki GitHub ve GitLab hesaplarının arşivlenmemiş depolarını izler. Bir ajan her varsayılan dalı ilerlediğinde ve ona açılan her pull request'i ya da merge request'i tarar; sonuç platforma OpenAsy SAST commit durumu ve eklediklerini listeleyen tek bir yorum olarak döner. Kod ajanda kalır; SAST yalnızca bulguları tutar.",
     "lookNow": "Şimdi bak",
     "connectAccount": "Hesap bağla",
     "noAgentOnline": "Çevrimiçi ajan yok",
@@ -203,9 +202,9 @@
     "actions": "İşlemler",
     "disconnect": "{{account}} bağlantısını kes",
     "noAccounts": "Bağlı hesap yok",
-    "noAccountsDetail": "Kodunu okuyabilen bir token'la bir GitHub organizasyonu ya da kullanıcısı bağlayın.",
+    "noAccountsDetail": "Kodunu okuyabilen bir token'la bir GitHub organizasyonu ya da kullanıcısı veya bir GitLab grubu ya da kullanıcısı bağlayın.",
     "agents": "Ajanlar",
-    "agentsDescription": "sast-agent kodu, GitHub'a ulaşabildiği yerde klonlar ve tarar. SAST'a o bağlanır; SAST ona asla bağlanmaz.",
+    "agentsDescription": "sast-agent kodu, GitHub'a ya da GitLab'a ulaşabildiği yerde klonlar ve tarar. SAST'a o bağlanır; SAST ona asla bağlanmaz.",
     "name": "Ad",
     "status": "Durum",
     "version": "Sürüm",
@@ -217,7 +216,7 @@
     },
     "removeAgent": "{{name}} ajanını kaldır",
     "noAgents": "Henüz ajan yok",
-    "noAgentsDetail": "GitHub'daki depoları taramak için bir tane ekleyin.",
+    "noAgentsDetail": "GitHub ve GitLab'daki depoları taramak için bir tane ekleyin.",
     "agentName": "Ajan adı",
     "agentNameHint": "Küçük harfler, rakamlar, nokta ve tire, örneğin dc1.",
     "addAgent": "Ajan ekle",
@@ -244,12 +243,16 @@
     "connectDescription": "Token GitHub ile kontrol edilir, mühürlenerek saklanır ve bir daha gösterilmez. Hesabın depolarının Contents ve Metadata'sına okuma, Pull requests ve Commit statuses'a okuma ve yazma erişimi olan ayrıntılı bir token yeterlidir.",
     "accountHint": "Organizasyon ya da kullanıcı, örneğin acme.",
     "token": "Token",
-    "tokenHint": "github_pat_...",
     "cancel": "Vazgeç",
     "connect": "Bağla",
     "startAgent": "{{name}} ajanını başlatın",
-    "startAgentDescription": "Bunu ajanın SAST'a ve GitHub'a ulaşabildiği yerde çalıştırın. Token bir kez, 7 gün boyunca çalışır ve yeniden gösterilmez.",
-    "done": "Tamam"
+    "startAgentDescription": "Bunu ajanın SAST'a ve platforma ulaşabildiği yerde çalıştırın. Token bir kez, 7 gün boyunca çalışır ve yeniden gösterilmez.",
+    "done": "Tamam",
+    "forge": "Platform",
+    "gitlabAddress": "GitLab adresi",
+    "gitlabAddressHint": "Kendi GitLab'ınız, yalnızca https. GitLab.com ya da kurulumun SAST_GITLAB_URL'i için boş bırakın.",
+    "accountHintGitlab": "Grup ya da kullanıcı, yoluyla: örneğin acme veya acme/platform. Alt gruplar grupla birlikte gelir.",
+    "connectDescriptionGitlab": "Token GitLab ile kontrol edilir, mühürlenerek saklanır ve bir daha gösterilmez. Developer ya da üstü için api kapsamlı bir grup ya da kişisel erişim token'ı yeterlidir: GitLab'da commit durumu yazabilen daha dar bir kapsam yok."
   },
   "rulesPage": {
     "title": "Kurallar",

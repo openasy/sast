@@ -76,10 +76,9 @@
     "sendAScanFromCi": "Senden Sie einen Scan aus CI. Siehe",
     "setup": "Einrichtung",
     "source": "Quelle",
-    "github": "GitHub",
-    "githubOff": "GitHub, aus",
     "ci": "CI",
-    "connectGithubOrCi": "Verbinden Sie ein GitHub-Konto, oder senden Sie einen Scan aus CI. Siehe"
+    "connectGithubOrCi": "Verbinden Sie ein GitHub- oder GitLab-Konto, oder senden Sie einen Scan aus CI. Siehe",
+    "forgeOff": "{{forge}}, aus"
   },
   "repositoryPage": {
     "repositoryNotFound": "Repository nicht gefunden",
@@ -113,7 +112,7 @@
     "noScans": "Keine Scans",
     "nothingHasBeenSentFor": "Für dieses Repository wurde nichts gesendet.",
     "scanning": "Scannen",
-    "scanningDescription": "Dieses Repository kommt von GitHub. Ein Agent scannt seinen Standard-Branch jedes Mal, wenn er sich bewegt.",
+    "scanningDescription": "Dieses Repository kommt von {{forge}}. Ein Agent scannt seinen Standard-Branch jedes Mal, wenn er sich bewegt.",
     "scanThisRepository": "Dieses Repository scannen",
     "headScanned": "Der neueste Commit, {{commit}}, ist gescannt.",
     "headNotScanned": "Der neueste Commit, {{commit}}, ist noch nicht gescannt.",
@@ -171,7 +170,7 @@
     "signIn": "Anmeldung",
     "apiTokens": "API-Tokens",
     "account": "Konto",
-    "github": "GitHub",
+    "github": "GitHub und GitLab",
     "rules": "Regeln"
   },
   "failOn": {
@@ -188,8 +187,8 @@
     "openFinding_other": "{{count}} offene Befunde"
   },
   "githubPage": {
-    "title": "GitHub",
-    "description": "SAST folgt den Repositorys der GitHub-Konten hier, nicht den archivierten. Ein Agent scannt jeden Standard-Branch, wenn er sich bewegt, und jeden offenen Pull Request darauf; das Ergebnis geht als Commit-Status OpenAsy SAST und als ein Kommentar mit dem, was er hinzufügt, an GitHub zurück. Der Code bleibt beim Agent; SAST behält nur Befunde.",
+    "title": "GitHub und GitLab",
+    "description": "SAST folgt den Repositorys der GitHub- und GitLab-Konten hier, nicht den archivierten. Ein Agent scannt jeden Standard-Branch, wenn er sich bewegt, und jeden offenen Pull Request oder Merge Request darauf; das Ergebnis geht als Commit-Status OpenAsy SAST und als ein Kommentar mit dem, was er hinzufügt, an die Plattform zurück. Der Code bleibt beim Agent; SAST behält nur Befunde.",
     "lookNow": "Jetzt nachsehen",
     "connectAccount": "Konto verbinden",
     "noAgentOnline": "Kein Agent ist online",
@@ -203,9 +202,9 @@
     "actions": "Aktionen",
     "disconnect": "{{account}} trennen",
     "noAccounts": "Keine Konten verbunden",
-    "noAccountsDetail": "Verbinden Sie eine GitHub-Organisation oder einen Benutzer mit einem Token, das den Code lesen kann.",
+    "noAccountsDetail": "Verbinden Sie eine GitHub-Organisation oder einen Benutzer, oder eine GitLab-Gruppe oder einen Benutzer, mit einem Token, das den Code lesen kann.",
     "agents": "Agents",
-    "agentsDescription": "sast-agent klont und scannt den Code dort, wo er GitHub erreicht. Er verbindet sich mit SAST; SAST verbindet sich nie mit ihm.",
+    "agentsDescription": "sast-agent klont und scannt den Code dort, wo er GitHub oder GitLab erreicht. Er verbindet sich mit SAST; SAST verbindet sich nie mit ihm.",
     "name": "Name",
     "status": "Status",
     "version": "Version",
@@ -217,7 +216,7 @@
     },
     "removeAgent": "Agent {{name}} entfernen",
     "noAgents": "Noch keine Agents",
-    "noAgentsDetail": "Fügen Sie einen hinzu, um Repositorys von GitHub zu scannen.",
+    "noAgentsDetail": "Fügen Sie einen hinzu, um Repositorys von GitHub und GitLab zu scannen.",
     "agentName": "Agent-Name",
     "agentNameHint": "Kleinbuchstaben, Ziffern, Punkte und Bindestriche, etwa dc1.",
     "addAgent": "Agent hinzufügen",
@@ -244,12 +243,16 @@
     "connectDescription": "Das Token wird bei GitHub geprüft, versiegelt gespeichert und nie wieder angezeigt. Ein feingranulares Token mit Lesezugriff auf Contents und Metadata der Repositorys des Kontos sowie Lese- und Schreibzugriff auf Pull requests und Commit statuses genügt.",
     "accountHint": "Die Organisation oder der Benutzer, etwa acme.",
     "token": "Token",
-    "tokenHint": "github_pat_...",
     "cancel": "Abbrechen",
     "connect": "Verbinden",
     "startAgent": "{{name}} starten",
-    "startAgentDescription": "Führen Sie dies dort aus, wo der Agent SAST und GitHub erreicht. Das Token funktioniert einmal, 7 Tage lang, und wird nicht erneut angezeigt.",
-    "done": "Fertig"
+    "startAgentDescription": "Führen Sie dies dort aus, wo der Agent SAST und die Plattform erreicht. Das Token funktioniert einmal, 7 Tage lang, und wird nicht erneut angezeigt.",
+    "done": "Fertig",
+    "forge": "Plattform",
+    "gitlabAddress": "GitLab-Adresse",
+    "gitlabAddressHint": "Ihr eigenes GitLab, nur https. Leer für GitLab.com oder SAST_GITLAB_URL der Installation.",
+    "accountHintGitlab": "Die Gruppe oder der Benutzer über den Pfad, etwa acme oder acme/platform. Untergruppen gehören zur Gruppe.",
+    "connectDescriptionGitlab": "Das Token wird bei GitLab geprüft, versiegelt gespeichert und nie wieder angezeigt. Ein Gruppen- oder persönliches Zugriffstoken mit dem Scope api, für Developer oder höher, genügt: GitLab hat keinen kleineren Scope, der einen Commit-Status setzen darf."
   },
   "rulesPage": {
     "title": "Regeln",

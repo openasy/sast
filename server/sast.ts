@@ -129,7 +129,9 @@ export function createSast(db: DatabaseSync, { retentionDays = 365 }: SastOption
       defaultBranch: r.default_branch as string,
       failOn: r.fail_on as FailOn,
       // From a forge connection, scanned by sast-agent, or sent from CI (ADR 0036).
-      source: (r.connection_id ? "github" : "ci") as "github" | "ci",
+      source: ((r.connection_id &&
+        (db.prepare("SELECT kind FROM forge_connections WHERE id = ?").get(r.connection_id) as { kind: string } | undefined)?.kind) ||
+        "ci") as "github" | "gitlab" | "ci",
       scanEnabled: r.scan_enabled !== 0,
       headCommit: (r.head_commit ?? null) as string | null,
       scannedCommit: (r.scanned_commit ?? null) as string | null,

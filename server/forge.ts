@@ -1,7 +1,8 @@
-// Repositories from a forge, scanned by sast-agent (ADR 0036). An owner connects a GitHub account with a token that
-// reads code; sast lists the account's repositories every few minutes, and a repository whose default branch moved
-// gets a scan job. An agent enrolled with a one-time token takes the job, clones the commit, runs Opengrep and sends
-// the SARIF back, which goes through the same comparison and triage as a scan from CI. sast holds no code.
+// Repositories from a forge, scanned by sast-agent (ADR 0036). An owner connects a GitHub account or a GitLab group or
+// user with a token that reads code; sast lists the account's repositories every few minutes, and a repository whose
+// default branch moved gets a scan job. An agent enrolled with a one-time token takes the job, clones the commit, runs
+// Opengrep and sends the SARIF back, which goes through the same comparison and triage as a scan from CI. sast holds
+// no code. What differs between the forges is behind ForgeApi; the queue, the agents and the comment are shared.
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { Keyring } from "./kek.ts";
@@ -13,6 +14,8 @@ const notFound = (what: string) => new SastError(404, "not-found", `${what} does
 const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 
 const ACCOUNT = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+// A GitLab group, subgroup or user by its full path, such as acme or acme/platform.
+const GITLAB_ACCOUNT = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,254}(?:\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,254}){0,19}$/;
 const AGENT_NAME = /^[a-z0-9][a-z0-9.-]{0,62}$/;
 const ENROLL_TTL_MS = 7 * 864e5;
 const LEASE_MS = 30 * 60_000;
@@ -25,9 +28,11 @@ const RULE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
 const MAX_OWN_RULES = 100;
 const MAX_RULE_BYTES = 256 * 1024;
 
+export type ForgeKind = "github" | "gitlab";
+
 export interface Connection {
   id: string;
-  kind: "github";
+  kind: ForgeKind;
   account: string;
   apiUrl: string;
   createdAt: string;
@@ -91,6 +96,8 @@ export interface ForgeOptions {
   publicUrl?: string;
   /** The GitHub API, https://api.github.com unless GitHub Enterprise Server. */
   githubApi?: string;
+  /** The GitLab a connection uses when it names none: https://gitlab.com unless set. */
+  gitlabUrl?: string;
   /** For tests: the HTTP client. */
   fetch?: typeof fetch;
   log?: (level: "info" | "warn", msg: string, fields?: Record<string, unknown>) => void;
@@ -109,16 +116,47 @@ export interface NewFinding {
 const COMMENT_FINDINGS = 10;
 const COMMENT_MARK = "<!-- openasy-sast -->";
 
-interface GithubPull {
-  number: number;
-  head: { sha: string; ref: string };
-  base: { ref: string };
-}
-
-/** The name of a commit status on GitHub: one per pull request commit, replaced as the scan moves on. */
+/** The name of a commit status on the forge: one per pull request commit, replaced as the scan moves on. */
 const CHECK_CONTEXT = "OpenAsy SAST";
 // A branch the agent will clone; a pull request from a branch with other characters is named after its number.
 const AGENT_BRANCH = /^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,255}$/;
+
+type Answer = { ok: boolean; status: number; body: unknown; next?: string };
+type CheckState = "pending" | "success" | "failure" | "error";
+
+/** A repository as a forge lists it, in sast's terms. */
+interface ForgeRepo {
+  name: string;
+  cloneUrl: string;
+  defaultBranch: string;
+  pushedAt: string | null;
+  /** Archived, disabled or empty: not scanned. */
+  skip: boolean;
+}
+
+/** An open pull request (GitHub) or merge request (GitLab); number is what people see, #7 or !7. */
+interface ForgePull {
+  number: string;
+  headSha: string;
+  headRef: string;
+  baseRef: string;
+}
+
+/** What sast asks of a forge. Each forge answers with its own API; a refused write says what the token lacks. */
+interface ForgeApi {
+  me(token: string): Promise<Answer>;
+  repositories(token: string, account: string): Promise<ForgeRepo[]>;
+  /** The branch's head commit; null when the branch is not there, as in an empty repository. */
+  head(token: string, repo: string, branch: string): Promise<string | null>;
+  pulls(token: string, repo: string): Promise<ForgePull[]>;
+  status(token: string, repo: string, sha: string, state: CheckState, description: string, targetUrl?: string): Promise<Answer>;
+  createComment(token: string, repo: string, pull: string, body: string): Promise<Answer & { id?: string }>;
+  updateComment(token: string, repo: string, pull: string, id: string, body: string): Promise<Answer>;
+  name: string;
+  /** What the forge calls a pull request, for the comment and the status. */
+  noun: "pull request" | "merge request";
+  refused: { status: string; comment: string };
+}
 
 interface GithubRepo {
   full_name: string;
@@ -130,16 +168,214 @@ interface GithubRepo {
   pushed_at: string | null;
 }
 
+interface GithubPull {
+  number: number;
+  head: { sha: string; ref: string };
+  base: { ref: string };
+}
+
+interface GitlabProject {
+  path_with_namespace: string;
+  http_url_to_repo: string;
+  default_branch: string | null;
+  archived: boolean;
+  empty_repo?: boolean;
+  repository_access_level?: string;
+  last_activity_at: string | null;
+}
+
+interface GitlabMerge {
+  iid: number;
+  sha: string | null;
+  source_branch: string;
+  target_branch: string;
+}
+
+/** One call to a forge's API, with the token as a bearer and a 15 second limit; the next page from its Link header. */
+async function request(
+  http: typeof fetch,
+  url: string,
+  token: string,
+  headers: Record<string, string>,
+  post?: unknown,
+  method: "POST" | "PATCH" | "PUT" = "POST",
+): Promise<Answer> {
+  const res = await http(url, {
+    method: post === undefined ? "GET" : method,
+    headers: {
+      authorization: `Bearer ${token}`,
+      "user-agent": "openasy-sast",
+      ...headers,
+      ...(post !== undefined && { "content-type": "application/json" }),
+    },
+    ...(post !== undefined && { body: JSON.stringify(post) }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  const next = /<([^>]+)>;\s*rel="next"/.exec(res.headers.get("link") ?? "")?.[1];
+  return { ok: res.ok, status: res.status, body: res.ok ? await res.json() : await res.text(), next };
+}
+
+function githubApi(http: typeof fetch, base: string): ForgeApi {
+  const call = (token: string, path: string, post?: unknown, method?: "POST" | "PATCH") =>
+    request(
+      http,
+      path.startsWith("http") ? path : `${base}${path}`,
+      token,
+      { accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" },
+      post,
+      method,
+    );
+  return {
+    name: "GitHub",
+    noun: "pull request",
+    refused: {
+      status: "The token may not post commit statuses: give it Commit statuses, read and write.",
+      comment: "The token may not comment on pull requests: give it Pull requests, read and write.",
+    },
+    me: (token) => call(token, "/user"),
+    /** Every repository the token can read that the account owns: an organization's or a user's own. */
+    async repositories(token, account) {
+      const out: ForgeRepo[] = [];
+      let url: string | undefined = "/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&sort=full_name";
+      for (let pages = 0; url && pages < 50; pages++) {
+        const r = await call(token, url);
+        if (!r.ok) throw new Error(r.status === 401 ? "GitHub refused the token: make a new one and connect again." : `GitHub answered ${r.status}.`);
+        for (const repo of r.body as GithubRepo[])
+          if (repo.owner.login.toLowerCase() === account.toLowerCase())
+            out.push({
+              name: repo.full_name,
+              cloneUrl: repo.clone_url,
+              defaultBranch: repo.default_branch,
+              pushedAt: repo.pushed_at,
+              skip: repo.archived || !!repo.disabled,
+            });
+        url = r.next;
+      }
+      return out;
+    },
+    async head(token, repo, branch) {
+      const r = await call(token, `/repos/${repo}/branches/${encodeURIComponent(branch)}`);
+      return r.ok ? (r.body as { commit: { sha: string } }).commit.sha : null;
+    },
+    async pulls(token, repo) {
+      const r = await call(token, `/repos/${repo}/pulls?state=open&per_page=100`);
+      if (!r.ok) return [];
+      return (r.body as GithubPull[]).map((p) => ({ number: String(p.number), headSha: p.head.sha, headRef: p.head.ref, baseRef: p.base.ref }));
+    },
+    status: (token, repo, sha, state, description, targetUrl) =>
+      call(token, `/repos/${repo}/statuses/${sha}`, {
+        state,
+        context: CHECK_CONTEXT,
+        description: description.slice(0, 140),
+        ...(targetUrl && { target_url: targetUrl }),
+      }),
+    async createComment(token, repo, pull, body) {
+      const r = await call(token, `/repos/${repo}/issues/${pull}/comments`, { body });
+      return { ...r, ...(r.ok && { id: String((r.body as { id: number }).id) }) };
+    },
+    updateComment: (token, repo, _pull, id, body) => call(token, `/repos/${repo}/issues/comments/${id}`, { body }, "PATCH"),
+  };
+}
+
+/** GitLab.com or a GitLab of the install's own, through its REST API v4. A project is named by its full path. */
+function gitlabApi(http: typeof fetch, base: string): ForgeApi {
+  const call = (token: string, path: string, post?: unknown, method?: "POST" | "PUT") =>
+    request(http, path.startsWith("http") ? path : `${base}${path}`, token, {}, post, method);
+  const project = (repo: string) => `/projects/${encodeURIComponent(repo)}`;
+  // GitLab has no "error": a scan that could not run fails the check, with the reason in its description.
+  const STATE: Record<CheckState, string> = { pending: "pending", success: "success", failure: "failed", error: "failed" };
+  return {
+    name: "GitLab",
+    noun: "merge request",
+    refused: {
+      status: "The token may not post commit statuses: give it the api scope, for a Developer or more.",
+      comment: "The token may not comment on merge requests: give it the api scope, for a Developer or more.",
+    },
+    me: (token) => call(token, "/user"),
+    /** Every project of the group and its subgroups, or of the user; not ones only shared with them. */
+    async repositories(token, account) {
+      const ns = await call(token, `/namespaces/${encodeURIComponent(account)}`);
+      if (!ns.ok)
+        throw new Error(
+          ns.status === 401
+            ? "GitLab refused the token: make a new one and connect again."
+            : ns.status === 404
+              ? `GitLab has no group or user ${account} the token can see.`
+              : `GitLab answered ${ns.status}.`,
+        );
+      const { id, kind } = ns.body as { id: number; kind: "group" | "user" };
+      let url: string | undefined =
+        kind === "group"
+          ? `/groups/${id}/projects?include_subgroups=true&with_shared=false&per_page=100&order_by=path&sort=asc`
+          : `/users/${id}/projects?per_page=100&order_by=path&sort=asc`;
+      const out: ForgeRepo[] = [];
+      for (let pages = 0; url && pages < 50; pages++) {
+        const r = await call(token, url);
+        if (!r.ok) throw new Error(r.status === 401 ? "GitLab refused the token: make a new one and connect again." : `GitLab answered ${r.status}.`);
+        for (const p of r.body as GitlabProject[])
+          out.push({
+            name: p.path_with_namespace,
+            cloneUrl: p.http_url_to_repo,
+            defaultBranch: p.default_branch ?? "",
+            pushedAt: p.last_activity_at,
+            skip: p.archived || !!p.empty_repo || !p.default_branch || p.repository_access_level === "disabled",
+          });
+        url = r.next;
+      }
+      return out;
+    },
+    async head(token, repo, branch) {
+      const r = await call(token, `${project(repo)}/repository/branches/${encodeURIComponent(branch)}`);
+      return r.ok ? (r.body as { commit: { id: string } }).commit.id : null;
+    },
+    async pulls(token, repo) {
+      const r = await call(token, `${project(repo)}/merge_requests?state=opened&per_page=100`);
+      if (!r.ok) return [];
+      return (r.body as GitlabMerge[])
+        .filter((m) => m.sha)
+        .map((m) => ({ number: String(m.iid), headSha: m.sha!, headRef: m.source_branch, baseRef: m.target_branch }));
+    },
+    status: (token, repo, sha, state, description, targetUrl) =>
+      call(token, `${project(repo)}/statuses/${sha}`, {
+        state: STATE[state],
+        name: CHECK_CONTEXT,
+        description: description.slice(0, 255),
+        ...(targetUrl && { target_url: targetUrl }),
+      }),
+    async createComment(token, repo, pull, body) {
+      const r = await call(token, `${project(repo)}/merge_requests/${pull}/notes`, { body });
+      return { ...r, ...(r.ok && { id: String((r.body as { id: number }).id) }) };
+    },
+    updateComment: (token, repo, pull, id, body) => call(token, `${project(repo)}/merge_requests/${pull}/notes/${id}`, { body }, "PUT"),
+  };
+}
+
+/** An https address of a GitLab, without credentials, query or fragment; its API is under /api/v4. */
+function gitlabBase(value: unknown): string {
+  let url: URL;
+  try {
+    url = new URL(typeof value === "string" ? value.trim() : "");
+  } catch {
+    throw bad("url is the https address of a GitLab, such as https://gitlab.example.com.");
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash)
+    throw bad("url is the https address of a GitLab, such as https://gitlab.example.com.");
+  return url.href.replace(/\/$/, "");
+}
+
 export function createForge(opts: ForgeOptions) {
   const { db } = opts;
   const http = opts.fetch ?? fetch;
-  const githubApi = (opts.githubApi ?? "https://api.github.com").replace(/\/$/, "");
+  const githubBase = (opts.githubApi ?? "https://api.github.com").replace(/\/$/, "");
+  const gitlabUrl = (opts.gitlabUrl ?? "https://gitlab.com").replace(/\/$/, "");
+  /** The API of a connection, at the address it was made with. */
+  const apiOf = (c: { kind: string; api_url: string }): ForgeApi => (c.kind === "gitlab" ? gitlabApi(http, c.api_url) : githubApi(http, c.api_url));
 
   // ---- connections --------------------------------------------------------
 
   const toConnection = (r: Record<string, string | null>): Connection => ({
     id: r.id!,
-    kind: "github",
+    kind: r.kind as ForgeKind,
     account: r.account!,
     apiUrl: r.api_url!,
     createdAt: r.created_at!,
@@ -152,70 +388,45 @@ export function createForge(opts: ForgeOptions) {
     return (db.prepare("SELECT * FROM forge_connections ORDER BY account").all() as Array<Record<string, string | null>>).map(toConnection);
   }
 
-  /** Checks the token against GitHub before keeping it: a wrong one is refused here, not at the first poll. */
-  async function createConnection(body: { kind?: unknown; account?: unknown; token?: unknown }): Promise<Connection> {
+  /** Checks the token against the forge before keeping it: a wrong one is refused here, not at the first poll. */
+  async function createConnection(body: { kind?: unknown; account?: unknown; token?: unknown; url?: unknown }): Promise<Connection> {
     if (!opts.keyring) throw new SastError(503, "not-configured", "Mount openasy-kek: forge tokens are kept only sealed (ADR 0021).");
-    if (body.kind !== undefined && body.kind !== "github") throw bad("kind is github.");
-    const account = typeof body.account === "string" ? body.account.trim() : "";
-    if (!ACCOUNT.test(account)) throw bad("account is a GitHub organization or user, such as acme.");
+    const kind: ForgeKind = body.kind === undefined ? "github" : (body.kind as ForgeKind);
+    if (kind !== "github" && kind !== "gitlab") throw bad("kind is github or gitlab.");
+    if (kind === "github" && body.url !== undefined) throw bad("url is for GitLab; GitHub's address is the install's SAST_GITHUB_API.");
+    const account = typeof body.account === "string" ? body.account.trim().replace(/^\/+|\/+$/g, "") : "";
+    if (kind === "github" && !ACCOUNT.test(account)) throw bad("account is a GitHub organization or user, such as acme.");
+    if (kind === "gitlab" && !GITLAB_ACCOUNT.test(account)) throw bad("account is a GitLab group or user by its path, such as acme or acme/platform.");
     const token = typeof body.token === "string" ? body.token.trim() : "";
-    if (token.length < 20 || token.length > 400 || /\s/.test(token)) throw bad("token is a GitHub token that reads the account's code.");
-    if (db.prepare("SELECT 1 FROM forge_connections WHERE kind = 'github' AND api_url = ? AND account = ? COLLATE NOCASE").get(githubApi, account))
+    if (token.length < 20 || token.length > 400 || /\s/.test(token))
+      throw bad(kind === "github" ? "token is a GitHub token that reads the account's code." : "token is a GitLab token with the api scope.");
+    const apiUrl = kind === "github" ? githubBase : `${body.url === undefined ? gitlabUrl : gitlabBase(body.url)}/api/v4`;
+    if (db.prepare("SELECT 1 FROM forge_connections WHERE kind = ? AND api_url = ? AND account = ? COLLATE NOCASE").get(kind, apiUrl, account))
       throw new SastError(409, "conflict", `${account} is connected already.`);
-    const me = await github(token, "/user");
-    if (!me.ok) throw bad(me.status === 401 ? "GitHub refused the token." : `GitHub answered ${me.status} to the token.`);
+    const api = apiOf({ kind, api_url: apiUrl });
+    let me: Answer;
+    try {
+      me = await api.me(token);
+    } catch (err) {
+      throw bad(`${api.name} could not be reached: ${(err as Error).message}`);
+    }
+    if (!me.ok) throw bad(me.status === 401 ? `${api.name} refused the token.` : `${api.name} answered ${me.status} to the token.`);
     const id = randomUUID();
-    db.prepare("INSERT INTO forge_connections (id, kind, account, api_url, token, created_at) VALUES (?, 'github', ?, ?, ?, ?)").run(
+    db.prepare("INSERT INTO forge_connections (id, kind, account, api_url, token, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(
       id,
+      kind,
       account,
-      githubApi,
+      apiUrl,
       opts.keyring.seal(token),
       now(),
     );
-    opts.log?.("info", "forge connected", { kind: "github", account });
+    opts.log?.("info", "forge connected", { kind, account });
     return toConnection(db.prepare("SELECT * FROM forge_connections WHERE id = ?").get(id) as Record<string, string | null>);
   }
 
   /** Its repositories stay with their findings, no longer scanned from the forge. */
   function deleteConnection(id: string) {
     if (db.prepare("DELETE FROM forge_connections WHERE id = ?").run(id).changes === 0) throw notFound("The connection");
-  }
-
-  // ---- GitHub ---------------------------------------------------------------
-
-  async function github(
-    token: string,
-    path: string,
-    post?: unknown,
-    method: "POST" | "PATCH" = "POST",
-  ): Promise<{ ok: boolean; status: number; body: unknown; next?: string }> {
-    const res = await http(path.startsWith("http") ? path : `${githubApi}${path}`, {
-      method: post === undefined ? "GET" : method,
-      headers: {
-        authorization: `Bearer ${token}`,
-        accept: "application/vnd.github+json",
-        "x-github-api-version": "2022-11-28",
-        "user-agent": "openasy-sast",
-        ...(post !== undefined && { "content-type": "application/json" }),
-      },
-      ...(post !== undefined && { body: JSON.stringify(post) }),
-      signal: AbortSignal.timeout(15_000),
-    });
-    const next = /<([^>]+)>;\s*rel="next"/.exec(res.headers.get("link") ?? "")?.[1];
-    return { ok: res.ok, status: res.status, body: res.ok ? await res.json() : await res.text(), next };
-  }
-
-  /** Every repository the token can read that the account owns: an organization's or a user's own. */
-  async function accountRepositories(token: string, account: string): Promise<GithubRepo[]> {
-    const out: GithubRepo[] = [];
-    let url: string | undefined = "/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&sort=full_name";
-    for (let pages = 0; url && pages < 50; pages++) {
-      const r = await github(token, url);
-      if (!r.ok) throw new Error(r.status === 401 ? "GitHub refused the token: make a new one and connect again." : `GitHub answered ${r.status}.`);
-      for (const repo of r.body as GithubRepo[]) if (repo.owner.login.toLowerCase() === account.toLowerCase()) out.push(repo);
-      url = r.next;
-    }
-    return out;
   }
 
   /**
@@ -225,34 +436,37 @@ export function createForge(opts: ForgeOptions) {
   async function poll() {
     for (const c of db.prepare("SELECT * FROM forge_connections").all() as Array<Record<string, string>>) {
       try {
+        const api = apiOf({ kind: c.kind!, api_url: c.api_url! });
         const token = opts.keyring!.open(c.token!).toString("utf8");
-        const repos = await accountRepositories(token, c.account!);
+        const repos = await api.repositories(token, c.account!);
         for (const repo of repos) {
-          if (repo.archived || repo.disabled) continue;
-          let row = db.prepare("SELECT * FROM repositories WHERE name = ?").get(repo.full_name) as Record<string, string | number | null> | undefined;
+          if (repo.skip) continue;
+          let row = db.prepare("SELECT * FROM repositories WHERE name = ?").get(repo.name) as Record<string, string | number | null> | undefined;
           if (!row) {
             db.prepare(
               "INSERT INTO repositories (id, name, default_branch, fail_on, created_at, connection_id, clone_url) VALUES (?, ?, ?, 'high', ?, ?, ?)",
-            ).run(randomUUID(), repo.full_name, repo.default_branch, now(), c.id!, repo.clone_url);
-            row = db.prepare("SELECT * FROM repositories WHERE name = ?").get(repo.full_name) as Record<string, string | number | null>;
-          } else if (row.connection_id !== c.id || row.clone_url !== repo.clone_url || row.default_branch !== repo.default_branch) {
+            ).run(randomUUID(), repo.name, repo.defaultBranch, now(), c.id!, repo.cloneUrl);
+            row = db.prepare("SELECT * FROM repositories WHERE name = ?").get(repo.name) as Record<string, string | number | null>;
+          } else if (row.connection_id && row.connection_id !== c.id) {
+            // The same name on another connection, such as acme/web on both GitHub and GitLab: the first one keeps it.
+            continue;
+          } else if (row.connection_id !== c.id || row.clone_url !== repo.cloneUrl || row.default_branch !== repo.defaultBranch) {
             // A repository CI scanned first joins the connection, and follows a renamed default branch.
             db.prepare("UPDATE repositories SET connection_id = ?, clone_url = ?, default_branch = ? WHERE id = ?").run(
               c.id!,
-              repo.clone_url,
-              repo.default_branch,
+              repo.cloneUrl,
+              repo.defaultBranch,
               row.id as string,
             );
           }
           if (row.scan_enabled === 0) continue;
-          await pullRequests(token, row.id as string, repo);
-          if (row.pushed_at === repo.pushed_at && row.head_commit) continue;
-          const branch = await github(token, `/repos/${repo.full_name}/branches/${encodeURIComponent(repo.default_branch)}`);
+          await pullRequests(api, token, row.id as string, repo);
+          if (row.pushed_at === repo.pushedAt && row.head_commit) continue;
+          const head = await api.head(token, repo.name, repo.defaultBranch);
           // An empty repository has no branch yet.
-          if (!branch.ok) continue;
-          const head = (branch.body as { commit: { sha: string } }).commit.sha;
-          db.prepare("UPDATE repositories SET pushed_at = ?, head_commit = ? WHERE id = ?").run(repo.pushed_at, head, row.id as string);
-          if (head !== row.scanned_commit) queue(row.id as string, repo.default_branch, head);
+          if (!head) continue;
+          db.prepare("UPDATE repositories SET pushed_at = ?, head_commit = ? WHERE id = ?").run(repo.pushedAt, head, row.id as string);
+          if (head !== row.scanned_commit) queue(row.id as string, repo.defaultBranch, head);
         }
         db.prepare("UPDATE forge_connections SET synced_at = ?, error = NULL WHERE id = ?").run(now(), c.id!);
       } catch (err) {
@@ -264,17 +478,25 @@ export function createForge(opts: ForgeOptions) {
 
   /**
    * The open pull requests into the default branch, each scanned at its latest commit and compared with the default
-   * branch. A fork's pull request is fetched from the base repository, which GitHub serves it from. One call a look.
+   * branch. A fork's pull request is fetched from the base repository, which GitHub and GitLab both serve it from.
+   * One call a look.
    */
-  async function pullRequests(token: string, repoId: string, repo: GithubRepo) {
-    const r = await github(token, `/repos/${repo.full_name}/pulls?state=open&per_page=100`);
-    if (!r.ok) return;
-    for (const pr of r.body as GithubPull[]) {
-      if (pr.base.ref !== repo.default_branch) continue;
-      const branch = AGENT_BRANCH.test(pr.head.ref) ? pr.head.ref : `pull/${pr.number}`;
-      const jobId = queue(repoId, branch, pr.head.sha, String(pr.number));
-      if (jobId) void postStatus(repoId, pr.head.sha, "pending", "Waiting for sast-agent to scan this commit.", null, jobId);
+  async function pullRequests(api: ForgeApi, token: string, repoId: string, repo: ForgeRepo) {
+    for (const pr of await api.pulls(token, repo.name)) {
+      if (pr.baseRef !== repo.defaultBranch) continue;
+      const branch = AGENT_BRANCH.test(pr.headRef) ? pr.headRef : `pull/${pr.number}`;
+      const jobId = queue(repoId, branch, pr.headSha, pr.number);
+      if (jobId) void postStatus(repoId, pr.headSha, "pending", "Waiting for sast-agent to scan this commit.", null, jobId);
     }
+  }
+
+  /** A connected repository's forge, its name there and the token, opened; undefined for one from CI. */
+  function forgeOf(repoId: string) {
+    const r = db
+      .prepare("SELECT r.name, c.kind, c.api_url, c.token FROM repositories r JOIN forge_connections c ON c.id = r.connection_id WHERE r.id = ?")
+      .get(repoId) as { name: string; kind: string; api_url: string; token: string } | undefined;
+    if (!r || !opts.keyring) return undefined;
+    return { api: apiOf(r), name: r.name, token: opts.keyring.open(r.token).toString("utf8") };
   }
 
   /**
@@ -310,22 +532,13 @@ export function createForge(opts: ForgeOptions) {
     scanId: string | null,
     jobId?: string,
   ) {
-    const r = db.prepare("SELECT r.name, c.token FROM repositories r JOIN forge_connections c ON c.id = r.connection_id WHERE r.id = ?").get(repoId) as
-      { name: string; token: string } | undefined;
-    if (!r || !opts.keyring) return;
+    const r = forgeOf(repoId);
+    if (!r) return;
     let error: string | null = null;
     try {
-      const res = await github(opts.keyring.open(r.token).toString("utf8"), `/repos/${r.name}/statuses/${sha}`, {
-        state,
-        context: CHECK_CONTEXT,
-        description: description.slice(0, 140),
-        ...(scanId && opts.publicUrl && { target_url: `${opts.publicUrl.replace(/\/$/, "")}/scans/${scanId}` }),
-      });
-      if (!res.ok)
-        error =
-          res.status === 403 || res.status === 404
-            ? "The token may not post commit statuses: give it Commit statuses, read and write."
-            : `GitHub answered ${res.status} to the commit status.`;
+      const target = scanId && opts.publicUrl ? `${opts.publicUrl.replace(/\/$/, "")}/scans/${scanId}` : undefined;
+      const res = await r.api.status(r.token, r.name, sha, state, description, target);
+      if (!res.ok) error = res.status === 403 || res.status === 404 ? r.api.refused.status : `${r.api.name} answered ${res.status} to the commit status.`;
     } catch (err) {
       error = `The commit status could not be posted: ${(err as Error).message}`;
     }
@@ -475,7 +688,7 @@ export function createForge(opts: ForgeOptions) {
     const token = typeof body.token === "string" ? body.token : "";
     const a = db.prepare("SELECT * FROM agents WHERE enroll_token_hash = ?").get(hash(token)) as Record<string, string> | undefined;
     if (!a || Date.parse(a.enroll_expires_at!) < Date.now())
-      throw new SastError(401, "invalid-token", "The enrolment token is unknown, used or expired. Make a new one under GitHub, Agents.");
+      throw new SastError(401, "invalid-token", "The enrolment token is unknown, used or expired. Make a new one under GitHub and GitLab, Agents.");
     const secret = `osa_${randomBytes(32).toString("base64url")}`;
     db.prepare("UPDATE agents SET enroll_token_hash = NULL, enroll_expires_at = NULL, secret_hash = ?, version = ?, last_seen = ? WHERE id = ?").run(
       hash(secret),
@@ -559,9 +772,8 @@ export function createForge(opts: ForgeOptions) {
    * and edited at each later scan, also to say there are none any more. A token that may not leaves the reason on the job.
    */
   async function postComment(repoId: string, pullRequest: string, scan: { id: string; new: number; blocking: number; findings: NewFinding[] }, jobId: string) {
-    const r = db.prepare("SELECT r.name, c.token FROM repositories r JOIN forge_connections c ON c.id = r.connection_id WHERE r.id = ?").get(repoId) as
-      { name: string; token: string } | undefined;
-    if (!r || !opts.keyring) return;
+    const r = forgeOf(repoId);
+    if (!r) return;
     const existing = (
       db.prepare("SELECT comment_id FROM pr_comments WHERE repo_id = ? AND pull_request = ?").get(repoId, pullRequest) as { comment_id: string } | undefined
     )?.comment_id;
@@ -571,7 +783,7 @@ export function createForge(opts: ForgeOptions) {
     const body = [
       COMMENT_MARK,
       scan.new
-        ? `**OpenAsy SAST**: this pull request adds ${scan.new} ${scan.new === 1 ? "finding" : "findings"}${scan.blocking ? `, ${scan.blocking} of them blocking` : ", none blocking"}.`
+        ? `**OpenAsy SAST**: this ${r.api.noun} adds ${scan.new} ${scan.new === 1 ? "finding" : "findings"}${scan.blocking ? `, ${scan.blocking} of them blocking` : ", none blocking"}.`
         : "**OpenAsy SAST**: the latest commit adds no findings.",
       ...(shown.length
         ? [
@@ -584,23 +796,19 @@ export function createForge(opts: ForgeOptions) {
       ...(scan.new > shown.length ? ["", `And ${scan.new - shown.length} more.`] : []),
       ...(link ? ["", `[See the scan](${link})`] : []),
     ].join("\n");
-    const token = opts.keyring.open(r.token).toString("utf8");
     let error: string | null = null;
     try {
-      let res = existing ? await github(token, `/repos/${r.name}/issues/comments/${existing}`, { body }, "PATCH") : undefined;
+      let res: Answer | undefined = existing ? await r.api.updateComment(r.token, r.name, pullRequest, existing, body) : undefined;
       // A comment someone deleted is written again.
       if (!res || res.status === 404) {
-        res = await github(token, `/repos/${r.name}/issues/${pullRequest}/comments`, { body });
-        if (res.ok)
+        const made = await r.api.createComment(r.token, r.name, pullRequest, body);
+        if (made.id)
           db.prepare(
             "INSERT INTO pr_comments (repo_id, pull_request, comment_id) VALUES (?, ?, ?) ON CONFLICT (repo_id, pull_request) DO UPDATE SET comment_id = excluded.comment_id",
-          ).run(repoId, pullRequest, String((res.body as { id: number }).id));
+          ).run(repoId, pullRequest, made.id);
+        res = made;
       }
-      if (!res.ok)
-        error =
-          res.status === 403
-            ? "The token may not comment on pull requests: give it Pull requests, read and write."
-            : `GitHub answered ${res.status} to the comment.`;
+      if (!res.ok) error = res.status === 403 ? r.api.refused.comment : `${r.api.name} answered ${res.status} to the comment.`;
     } catch (err) {
       error = `The comment could not be posted: ${(err as Error).message}`;
     }
@@ -623,9 +831,10 @@ export function createForge(opts: ForgeOptions) {
     );
     db.prepare("UPDATE scan_jobs SET status = 'done', scan_id = ?, finished_at = ?, lease_until = NULL WHERE id = ?").run(scan.id, now(), jobId);
     if (j.pull_request) {
+      const noun = forgeOf(j.repo_id!)?.api.noun ?? "pull request";
       const description = scan.passed
         ? `${scan.new ? `${scan.new} new, none blocking` : "Nothing new"}.`
-        : `${scan.blocking} new ${scan.blocking === 1 ? "finding blocks" : "findings block"} this pull request.`;
+        : `${scan.blocking} new ${scan.blocking === 1 ? "finding blocks" : "findings block"} this ${noun}.`;
       await postStatus(j.repo_id!, j.commit_sha!, scan.passed ? "success" : "failure", description, scan.id, jobId);
       await postComment(j.repo_id!, j.pull_request, scan, jobId);
     } else db.prepare("UPDATE repositories SET scanned_commit = ? WHERE id = ?").run(j.commit_sha!, j.repo_id!);

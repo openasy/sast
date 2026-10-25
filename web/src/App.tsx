@@ -17,6 +17,7 @@ import {
   Panel,
   PRODUCT_IDS,
   SearchInput,
+  SegmentedControl,
   SelectField,
   SeverityBadge,
   StatusBadge,
@@ -493,8 +494,10 @@ function RepositoriesPage({ call }: { call: Call }) {
       id: "source",
       header: t("repositoriesPage.source"),
       cell: (r) =>
-        r.source === "github" ? (
-          <Badge tone={r.scanEnabled ? "info" : "neutral"}>{r.scanEnabled ? t("repositoriesPage.github") : t("repositoriesPage.githubOff")}</Badge>
+        r.source !== "ci" ? (
+          <Badge tone={r.scanEnabled ? "info" : "neutral"}>
+            {r.scanEnabled ? FORGE_NAME[r.source] : t("repositoriesPage.forgeOff", { forge: FORGE_NAME[r.source] })}
+          </Badge>
         ) : (
           <Badge>{t("repositoriesPage.ci")}</Badge>
         ),
@@ -531,8 +534,7 @@ function RepositoriesPage({ call }: { call: Call }) {
           minWidth={760}
           empty={
             <EmptyState title={t("repositoriesPage.noRepositoriesYet")}>
-              {t("repositoriesPage.connectGithubOrCi")} <a href="/github">{t("repositoriesPage.github")}</a>, <a href="/setup">{t("repositoriesPage.setup")}</a>
-              .
+              {t("repositoriesPage.connectGithubOrCi")} <a href="/github">{t("product.github")}</a>, <a href="/setup">{t("repositoriesPage.setup")}</a>.
             </EmptyState>
           }
         />
@@ -638,8 +640,8 @@ function RepositoryPage({ call, id, reload }: { call: Call; id: string; reload: 
             : undefined
         }
       />
-      {repo?.source === "github" && (
-        <Panel title={t("repositoryPage.scanning")} description={t("repositoryPage.scanningDescription")}>
+      {repo && repo.source !== "ci" && (
+        <Panel title={t("repositoryPage.scanning")} description={t("repositoryPage.scanningDescription", { forge: FORGE_NAME[repo.source] })}>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <Switch
               checked={repo.scanEnabled}
@@ -1008,9 +1010,10 @@ const ruleIds = (yaml: string) => [...yaml.matchAll(/^\s*-\s*id:\s*([^\s#]+)/gm)
 // ---------------------------------------------------------------- GitHub
 
 const JOB_TONE = { queued: "neutral", running: "info", done: "success", failed: "danger" } as const;
+const FORGE_NAME = { github: "GitHub", gitlab: "GitLab" } as const;
 const AGENT_TONE = { "waiting-to-enrol": "warning", online: "success", offline: "danger" } as const;
 
-/** GitHub accounts sast follows, the agents that scan them, extra rule sources and the scan queue (ADR 0036). */
+/** GitHub and GitLab accounts sast follows, the agents that scan them, extra rule sources and the scan queue (ADR 0036). */
 function GithubPage({ call, reload }: { call: Call; reload: () => void }) {
   const ago = useAgo();
   const t = useT();
@@ -1022,6 +1025,8 @@ function GithubPage({ call, reload }: { call: Call; reload: () => void }) {
   const [newSource, setNewSource] = useState("");
   const [sourceError, setSourceError] = useState<string>();
   const [adding, setAdding] = useState(false);
+  const [kind, setKind] = useState<Connection["kind"]>("github");
+  const [gitlabUrl, setGitlabUrl] = useState("");
   const [account, setAccount] = useState("");
   const [token, setToken] = useState("");
   const [connectError, setConnectError] = useState<string>();
@@ -1054,11 +1059,12 @@ function GithubPage({ call, reload }: { call: Call; reload: () => void }) {
     return () => clearInterval(timer);
   }, [load]);
 
-  const closeConnect = () => (setAdding(false), setAccount(""), setToken(""), setConnectError(undefined));
+  const closeConnect = () => (setAdding(false), setKind("github"), setGitlabUrl(""), setAccount(""), setToken(""), setConnectError(undefined));
   const connect = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      await call("/api/v1/connections", { method: "POST", body: JSON.stringify({ kind: "github", account, token }) });
+      const url = kind === "gitlab" && gitlabUrl.trim() ? { url: gitlabUrl.trim() } : {};
+      await call("/api/v1/connections", { method: "POST", body: JSON.stringify({ kind, account: account.trim(), token, ...url }) });
       closeConnect();
       load();
       reload();
@@ -1102,6 +1108,16 @@ function GithubPage({ call, reload }: { call: Call; reload: () => void }) {
 
   const connectionColumns: Column<Connection>[] = [
     { id: "account", header: t("githubPage.account"), cell: (c) => <span className="font-medium">{c.account}</span> },
+    {
+      id: "forge",
+      header: t("githubPage.forge"),
+      cell: (c) => (
+        <span className="flex flex-col gap-0.5">
+          <span>{FORGE_NAME[c.kind]}</span>
+          <span className="font-mono text-xs text-fg-muted">{new URL(c.apiUrl).host}</span>
+        </span>
+      ),
+    },
     { id: "repos", header: t("githubPage.repositories"), align: "right", cell: (c) => c.repositories },
     {
       id: "synced",
@@ -1289,7 +1305,7 @@ function GithubPage({ call, reload }: { call: Call; reload: () => void }) {
         open={adding}
         onOpenChange={(open) => !open && closeConnect()}
         title={t("githubPage.connectAccount")}
-        description={t("githubPage.connectDescription")}
+        description={kind === "gitlab" ? t("githubPage.connectDescriptionGitlab") : t("githubPage.connectDescription")}
         onSubmit={connect}
         footer={
           <>
@@ -1302,14 +1318,38 @@ function GithubPage({ call, reload }: { call: Call; reload: () => void }) {
           </>
         }
       >
-        <TextField label={t("githubPage.account")} value={account} onChange={(e) => setAccount(e.target.value)} hint={t("githubPage.accountHint")} />
+        <SegmentedControl
+          label={t("githubPage.forge")}
+          value={kind}
+          onChange={setKind}
+          options={[
+            { value: "github", label: FORGE_NAME.github },
+            { value: "gitlab", label: FORGE_NAME.gitlab },
+          ]}
+        />
+        {kind === "gitlab" && (
+          <TextField
+            label={t("githubPage.gitlabAddress")}
+            value={gitlabUrl}
+            onChange={(e) => setGitlabUrl(e.target.value)}
+            placeholder="https://gitlab.example.com"
+            hint={t("githubPage.gitlabAddressHint")}
+            mono
+          />
+        )}
+        <TextField
+          label={t("githubPage.account")}
+          value={account}
+          onChange={(e) => setAccount(e.target.value)}
+          hint={kind === "gitlab" ? t("githubPage.accountHintGitlab") : t("githubPage.accountHint")}
+        />
         <TextField
           label={t("githubPage.token")}
           type="password"
           autoComplete="off"
           value={token}
           onChange={(e) => setToken(e.target.value)}
-          hint={t("githubPage.tokenHint")}
+          hint={kind === "gitlab" ? "glpat-..." : "github_pat_..."}
           error={connectError}
           mono
         />

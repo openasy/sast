@@ -332,3 +332,174 @@ describe("pull requests of a connected repository (ADR 0036)", () => {
     expect(job).toMatchObject({ status: "queued", checkError: expect.stringMatching(/Commit statuses, read and write/) });
   });
 });
+
+describe("repositories and merge requests from GitLab (ADR 0036)", () => {
+  const GL = "glpat-0123456789abcdefghij";
+  const head = "c".repeat(40);
+  const mrHead = "9".repeat(40);
+  const calls: string[] = [];
+  const statuses: Array<{ path: string; body: Record<string, unknown> }> = [];
+  const notes: Array<{ method: string; path: string; body: string }> = [];
+  const project = (path: string, extra: object = {}) => ({
+    path_with_namespace: path,
+    http_url_to_repo: `https://gitlab.example.com/${path}.git`,
+    default_branch: "main",
+    archived: false,
+    empty_repo: false,
+    last_activity_at: "2026-10-22T10:00:00Z",
+    ...extra,
+  });
+  const server: Server = createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const c of req) chunks.push(c as Buffer);
+    calls.push(`${req.method} ${req.url}`);
+    if (req.headers.authorization !== `Bearer ${GL}`) return res.writeHead(401).end("{}");
+    const send = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
+      res.writeHead(status, { "content-type": "application/json", ...headers }).end(JSON.stringify(body));
+    const url = new URL(req.url!, "http://x");
+    // Node keeps %2F encoded in the path, as GitLab expects a project's full path.
+    const path = url.pathname;
+    if (path === "/api/v4/user") return send({ username: "dev" });
+    if (path === "/api/v4/namespaces/acme%2Fplatform") return send({ id: 12, kind: "group", full_path: "acme/platform" });
+    if (path === "/api/v4/groups/12/projects") {
+      expect(url.searchParams.get("include_subgroups")).toBe("true");
+      if (url.searchParams.get("page") !== "2")
+        return send([project("acme/platform/api"), project("acme/platform/old", { archived: true })], 200, {
+          link: `<http://${req.headers.host}/api/v4/groups/12/projects?include_subgroups=true&page=2>; rel="next"`,
+        });
+      return send([project("acme/platform/empty", { default_branch: null, empty_repo: true }), project("acme/platform/tools/cli")]);
+    }
+    const b = /^\/api\/v4\/projects\/(.+)\/repository\/branches\/main$/.exec(path);
+    if (b) return send({ name: "main", commit: { id: decodeURIComponent(b[1]!).endsWith("cli") ? "d".repeat(40) : head } });
+    if (path === "/api/v4/projects/acme%2Fplatform%2Fapi/merge_requests")
+      return send([
+        { iid: 4, sha: mrHead, source_branch: "fix/auth", target_branch: "main" },
+        { iid: 5, sha: null, source_branch: "wip", target_branch: "main" },
+      ]);
+    if (/^\/api\/v4\/projects\/.+\/merge_requests$/.test(path)) return send([]);
+    if (req.method === "POST" && path.startsWith("/api/v4/projects/acme%2Fplatform%2Fapi/statuses/")) {
+      statuses.push({ path, body: JSON.parse(Buffer.concat(chunks).toString("utf8")) });
+      return send({}, 201);
+    }
+    if (
+      path === "/api/v4/projects/acme%2Fplatform%2Fapi/merge_requests/4/notes" ||
+      path === "/api/v4/projects/acme%2Fplatform%2Fapi/merge_requests/4/notes/55"
+    ) {
+      notes.push({ method: req.method!, path, body: JSON.parse(Buffer.concat(chunks).toString("utf8")).body });
+      return send({ id: 55 }, req.method === "POST" ? 201 : 200);
+    }
+    res.writeHead(404).end("{}");
+  });
+  let gl: Awaited<ReturnType<typeof startApp>>;
+  beforeAll(async () => {
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    gl = await startApp({
+      version,
+      forgeOptions: { gitlabUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, publicUrl: "https://sast.example.com" },
+    });
+  });
+  afterAll(async () => {
+    await gl.close();
+    await new Promise((r) => server.close(r));
+  });
+  const connect = (body: object) => gl.admin("/api/v1/connections", { method: "POST", body: JSON.stringify({ kind: "gitlab", ...body }) });
+
+  it("connects a group by its path with a token GitLab accepts, at an https address of the install's own", async () => {
+    expect((await connect({ account: "acme/platform", token: "glpat-wrong-wrong-wrong-wrong" })).status).toBe(422);
+    expect((await connect({ account: "acme//x", token: GL })).status).toBe(422);
+    expect((await connect({ account: "acme", token: GL, url: "http://gitlab.example.com" })).status).toBe(422);
+    expect((await connect({ account: "acme", token: GL, url: "https://user:pw@gitlab.example.com" })).status).toBe(422);
+    const res = await connect({ account: "acme/platform", token: GL });
+    expect(res.status).toBe(201);
+    const c = await json(res);
+    expect(c).toMatchObject({ kind: "gitlab", account: "acme/platform", apiUrl: expect.stringMatching(/\/api\/v4$/) });
+    expect(JSON.stringify(c)).not.toContain(GL);
+    expect((await connect({ account: "acme/platform", token: GL })).status).toBe(409);
+  });
+
+  it("lists the group's projects with its subgroups', not archived or empty ones, and queues each default branch", async () => {
+    await gl.forge.poll();
+    const repos = (await json(await gl.admin("/api/v1/repositories"))).repositories as Array<Record<string, unknown>>;
+    expect(repos.map((r) => `${r.name} ${r.source}`)).toEqual(["acme/platform/api gitlab", "acme/platform/tools/cli gitlab"]);
+    const jobs = (await json(await gl.admin("/api/v1/jobs"))).jobs as Array<Record<string, any>>;
+    // The merge request without a commit yet waits for the next look.
+    expect(jobs.map((j) => `${j.repository} ${j.branch} ${j.pullRequest}`).sort()).toEqual([
+      "acme/platform/api fix/auth 4",
+      "acme/platform/api main null",
+      "acme/platform/tools/cli main null",
+    ]);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(statuses).toEqual([
+      { path: `/api/v4/projects/acme%2Fplatform%2Fapi/statuses/${mrHead}`, body: expect.objectContaining({ state: "pending", name: "OpenAsy SAST" }) },
+    ]);
+  });
+
+  it("sends the merge request's result back as a commit status and one note, edited at the next scan", async () => {
+    const made = await json(await gl.admin("/api/v1/agents", { method: "POST", body: JSON.stringify({ name: "dc1" }) }));
+    const { secret } = await json(await fetch(gl.base + "/api/v1/agent/enroll", { method: "POST", body: JSON.stringify({ token: made.enrollToken }) }));
+    const agent = (path: string, body: string) => fetch(gl.base + path, { method: "POST", headers: { authorization: `Bearer ${secret}` }, body });
+    const take = async () => (await json(await agent("/api/v1/agent/work", "{}"))).jobs[0];
+    for (let i = 0; i < 2; i++) {
+      const base = await take();
+      expect(base.pullRequest ?? null).toBeNull();
+      expect(base).toMatchObject({ token: GL, cloneUrl: expect.stringMatching(/^https:\/\/gitlab\.example\.com\//) });
+      await agent(`/api/v1/agent/jobs/${base.id}/sarif`, sarif({ rule: "js.eval", level: "error", path: "src/a.js", line: 3 }));
+    }
+    const mr = await take();
+    expect(mr).toMatchObject({ repository: "acme/platform/api", branch: "fix/auth", commit: mrHead });
+    await agent(
+      `/api/v1/agent/jobs/${mr.id}/sarif`,
+      sarif({ rule: "js.eval", level: "error", path: "src/a.js", line: 3 }, { rule: "js.sql", level: "error", path: "src/db.js", line: 9 }),
+    );
+    expect(statuses.at(-1)).toEqual({
+      path: `/api/v4/projects/acme%2Fplatform%2Fapi/statuses/${mrHead}`,
+      body: {
+        state: "failed",
+        name: "OpenAsy SAST",
+        description: "1 new finding blocks this merge request.",
+        target_url: expect.stringMatching(/^https:\/\/sast\.example\.com\/scans\//),
+      },
+    });
+    expect(notes).toEqual([
+      {
+        method: "POST",
+        path: "/api/v4/projects/acme%2Fplatform%2Fapi/merge_requests/4/notes",
+        body: expect.stringContaining("this merge request adds 1 finding"),
+      },
+    ]);
+
+    // The same commit scanned again with nothing new edits the note.
+    gl.db.prepare("DELETE FROM scan_jobs WHERE pull_request = '4'").run();
+    await gl.forge.poll();
+    const again = await take();
+    await agent(`/api/v1/agent/jobs/${again.id}/sarif`, sarif({ rule: "js.eval", level: "error", path: "src/a.js", line: 3 }));
+    expect(notes.at(-1)).toEqual({
+      method: "PUT",
+      path: "/api/v4/projects/acme%2Fplatform%2Fapi/merge_requests/4/notes/55",
+      body: expect.stringContaining("the latest commit adds no findings"),
+    });
+    expect(statuses.at(-1)!.body).toMatchObject({ state: "success", description: "Nothing new." });
+  });
+
+  it("leaves a repository another connection has to it, and says when GitLab has no such group", async () => {
+    gl.db
+      .prepare(
+        "INSERT INTO forge_connections (id, kind, account, api_url, token, created_at) VALUES ('other', 'github', 'acme', 'https://api.github.com', 'x', 'now')",
+      )
+      .run();
+    gl.db.prepare("UPDATE repositories SET connection_id = 'other' WHERE name = 'acme/platform/tools/cli'").run();
+    const cli = async () =>
+      ((await json(await gl.admin("/api/v1/repositories"))).repositories as Array<Record<string, any>>).find((r) => r.name === "acme/platform/tools/cli");
+    await gl.forge.poll();
+    expect((await cli())!.source).toBe("github");
+    // Deleting the other connection frees the repository; the next look takes it back.
+    gl.db.prepare("DELETE FROM forge_connections WHERE id = 'other'").run();
+    await gl.forge.poll();
+    expect((await cli())!.source).toBe("gitlab");
+
+    const id = (await json(await gl.admin("/api/v1/connections"))).connections[0].id as string;
+    gl.db.prepare("UPDATE forge_connections SET account = 'acme/gone' WHERE id = ?").run(id);
+    await gl.forge.poll();
+    expect((await json(await gl.admin("/api/v1/connections"))).connections[0].error).toBe("GitLab has no group or user acme/gone the token can see.");
+  });
+});

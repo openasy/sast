@@ -2358,9 +2358,10 @@
             "type": "string",
             "enum": [
               "github",
+              "gitlab",
               "ci"
             ],
-            "description": "github: from a connection, scanned by sast-agent. ci: sent from CI."
+            "description": "github or gitlab: from a connection, scanned by sast-agent. ci: sent from CI."
           },
           "scanEnabled": {
             "type": "boolean",
@@ -2893,20 +2894,23 @@
           "kind": {
             "type": "string",
             "enum": [
-              "github"
+              "github",
+              "gitlab"
             ]
           },
           "account": {
             "type": "string",
-            "description": "The organization or user whose repositories are scanned.",
+            "description": "The GitHub organization or user, or the GitLab group or user by its path, whose repositories are scanned.",
             "examples": [
-              "acme"
+              "acme",
+              "acme/platform"
             ]
           },
           "apiUrl": {
             "type": "string",
             "examples": [
-              "https://api.github.com"
+              "https://api.github.com",
+              "https://gitlab.com/api/v4"
             ]
           },
           "createdAt": {
@@ -2958,18 +2962,29 @@
           "kind": {
             "type": "string",
             "enum": [
-              "github"
-            ]
+              "github",
+              "gitlab"
+            ],
+            "default": "github"
           },
           "account": {
             "type": "string",
+            "description": "A GitHub organization or user, such as acme; or a GitLab group, subgroup or user by its path, such as acme/platform.",
             "examples": [
               "acme"
             ]
           },
           "token": {
             "type": "string",
-            "description": "A GitHub token that reads the account's code: a fine-grained token with Contents and Metadata read. Kept sealed, never returned."
+            "description": "Kept sealed, never returned. GitHub: a fine-grained token with Contents and Metadata read, and Pull requests and Commit statuses read and write. GitLab: a group or personal access token with the api scope, for a Developer or more."
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "GitLab only: the https address of the install's own GitLab. Without it, SAST_GITLAB_URL, which is https://gitlab.com unless set.",
+            "examples": [
+              "https://gitlab.example.com"
+            ]
           }
         }
       },

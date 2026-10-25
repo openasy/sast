@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 // Forward-only migrations (ADR 0010): append new entries, never edit or remove old ones.
-const MIGRATIONS = [
+export const MIGRATIONS = [
   `CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
    -- A repository is created by its first scan. Its default branch is the baseline other branches are compared with.
    CREATE TABLE repositories (
@@ -133,6 +133,26 @@ const MIGRATIONS = [
      created_at TEXT NOT NULL,
      updated_at TEXT NOT NULL
    );`,
+  // GitLab groups and users are connected too (ADR 0036). SQLite cannot change a CHECK, so the table is made again.
+  // Dropping the old one sets repositories.connection_id to NULL through its foreign key: it is kept aside and put back.
+  `CREATE TEMP TABLE repo_connections AS SELECT id, connection_id FROM repositories WHERE connection_id IS NOT NULL;
+   CREATE TABLE forge_connections_new (
+     id TEXT PRIMARY KEY,
+     kind TEXT NOT NULL CHECK (kind IN ('github', 'gitlab')),
+     account TEXT NOT NULL,
+     api_url TEXT NOT NULL,
+     token TEXT NOT NULL,
+     created_at TEXT NOT NULL,
+     synced_at TEXT,
+     error TEXT,
+     UNIQUE (kind, api_url, account)
+   );
+   INSERT INTO forge_connections_new SELECT id, kind, account, api_url, token, created_at, synced_at, error FROM forge_connections;
+   DROP TABLE forge_connections;
+   ALTER TABLE forge_connections_new RENAME TO forge_connections;
+   UPDATE repositories SET connection_id = (SELECT connection_id FROM repo_connections c WHERE c.id = repositories.id)
+     WHERE id IN (SELECT id FROM repo_connections);
+   DROP TABLE repo_connections;`,
 ];
 
 /** Opens the product's single SQLite file in WAL mode (ADR 0011) and migrates it forward. */

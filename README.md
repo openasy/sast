@@ -14,10 +14,10 @@ CI: opengrep scan --sarif-output=results.sarif  ──POST /api/v1/scans──�
                                                                            └── baseline: the default branch's findings, triage, history
 ```
 
-Or connect a GitHub account: sast follows its repositories and
-[sast-agent](https://github.com/openasy/sast-agent) clones and scans each default branch when it moves. Either way
-sast reads SARIF and nothing else: it holds no scanner, no source code and runs no one's code. Checks posted to GitHub
-and GitLab come next (ADR 0036).
+Or connect a GitHub account or a GitLab group or user: sast follows its repositories and
+[sast-agent](https://github.com/openasy/sast-agent) clones and scans each default branch when it moves, and each open
+pull request or merge request into it, whose result goes back as a commit status and one comment. Either way sast reads
+SARIF and nothing else: it holds no scanner, no source code and runs no one's code (ADR 0036).
 
 ## How a scan is compared
 
@@ -31,28 +31,37 @@ and GitLab come next (ADR 0036).
 - A **false positive** or **accepted risk** (with a reason, and an end date for accepted risk) follows the finding to
   every branch. A finding that is only in a pull request can be triaged too.
 
-## Repositories from GitHub
+## Repositories from GitHub and GitLab
 
-Under GitHub, an owner connects an organization or user with a token. A fine-grained token with read access to
-**Contents** and **Metadata** of the account's repositories, and read and write access to **Pull requests** and
-**Commit statuses**, is enough; sast checks it with GitHub, keeps it sealed with `openasy-kek` and never shows it again.
+Under GitHub and GitLab, an owner connects an account with a token. sast checks the token with the forge, keeps it
+sealed with `openasy-kek` and never shows it again.
+
+- **GitHub:** an organization or user. A fine-grained token with read access to **Contents** and **Metadata** of the
+  account's repositories, and read and write access to **Pull requests** and **Commit statuses**, is enough.
+- **GitLab:** a group, with its subgroups, or a user, by its path such as `acme` or `acme/platform`, on GitLab.com or
+  the install's own GitLab (its https address, or `SAST_GITLAB_URL` for all of them). A group access token or a
+  personal access token with the **api** scope, for a **Developer** or more, is enough: GitLab has no smaller scope
+  that may post a commit status. Projects only shared with the group are left out.
+- A repository is named by its path on the forge. When GitHub and GitLab both have one with the same name, the
+  connection that found it first keeps it.
 
 - sast lists the account's repositories every few minutes (`SAST_POLL_MINUTES`), leaves archived ones and other
   owners' out, and queues a scan of a default branch whenever its latest commit is not scanned yet. A quiet account
-  costs one GitHub call per 100 repositories.
-- Each open pull request into the default branch is scanned at its latest commit, after the default branch, and
+  costs one call per 100 repositories.
+- Each open pull request (merge request on GitLab) into the default branch is scanned at its latest commit, after the default branch, and
   compared with it. Its result goes back to the pull request as the commit status **OpenAsy SAST**: pending while it
   waits, then success or failure with the number of new and blocking findings and a link to the scan. Make it a
-  required status check in the branch's protection rules to block merging. One comment on the pull request lists the
+  required status check in the branch's protection rules to block merging; on GitLab the status joins the commit's
+  pipeline, so "Pipelines must succeed" does it. One comment on the pull request lists the
   findings it adds, up to 10 with a link to the rest, and is edited at each later scan rather than added again. A token that may not post statuses still
-  gets its pull requests scanned; the job says why the status is missing. Listing pull requests costs one GitHub call
-  per repository on each look.
+  gets its pull requests scanned; the job says why the status is missing. Listing pull requests costs one call per
+  repository on each look.
 - A repository can be turned off on its own page; its queued scans are dropped. **Scan now** queues the latest commit
   again.
-- An admin adds agents under GitHub; each gets a one-time enrolment token and a command to start it. An agent asks for
+- An admin adds agents under GitHub and GitLab; each gets a one-time enrolment token and a command to start it. An agent asks for
   a job, receives the commit, the clone URL and the token, scans in memory and sends SARIF back. A job an agent does
   not finish within 30 minutes goes back to the queue, three times at most.
-- The agent ships OpenAsy's own Opengrep rules. Admins may add public rule repositories under GitHub, Rule sources;
+- The agent ships OpenAsy's own Opengrep rules. Admins may add public rule repositories under GitHub and GitLab, Rule sources;
   their content and licence are the install's responsibility.
 - Under Rules, admins write rule files of their own in Opengrep's format, sent to the agent with each job, and switch
   rules off by id, whichever file they come from; a finding's panel can switch its rule off too. A rule file Opengrep
@@ -96,8 +105,9 @@ backups.
 | `SAST_SECRETS_KEY_FILE` | `/run/secrets/openasy-kek` | 32-byte key-encryption key |
 | `SAST_DB` | `/data/sast.db` | SQLite file (WAL), on the `/data` volume |
 | `SAST_RETENTION_DAYS` | `365` | Scans, and fixed findings nobody triaged, older than this are deleted |
-| `SAST_POLL_MINUTES` | `5` | How often connected GitHub accounts are looked at |
+| `SAST_POLL_MINUTES` | `5` | How often connected GitHub and GitLab accounts are looked at |
 | `SAST_GITHUB_API` | `https://api.github.com` | The GitHub API, such as `https://github.example.com/api/v3` for GitHub Enterprise Server |
+| `SAST_GITLAB_URL` | `https://gitlab.com` | The GitLab a connection uses when it names no address of its own |
 | `SAST_METRICS_PORT` | | Serve `/metrics` on this port only (ADR 0026) |
 | `SAST_HEADLESS` | `false` | `true` serves only the API |
 | `SAST_PASSWORD_SIGN_IN`, `OPENASY_OIDC_*` | | Sign-in, as in every OpenAsy product ([@openasy/auth](https://github.com/openasy/auth)). Owners can also add identity providers under Settings, Sign-in |
